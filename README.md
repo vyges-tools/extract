@@ -91,6 +91,32 @@ A complete, runnable example is in [`examples/counter/`](examples/counter/);
 `vyges-extract` is open and contains **no foundry-confidential data**. It runs
 out of the box on open PDKs (sky130, gf180) using bundled reference rules.
 
+```text
+  vyges-extract — OPEN engine  (Apache-2.0, contains no fab data)
+  ────────────────────────────────────────────────────────────────────
+    *.def  ─►  def.rs ─► rc.rs ─► spef.rs  ─►  *.spef
+                          ▲
+                          └─ published plugin contract
+                             (.rules: ohm/µm · fF/µm · coupling · per-via Ω)
+                                       │
+                 loads ONE rules / calibration plugin
+                                       │
+        ┌──────────────────────────────┴──────────────────────────────┐
+        │                                                              │
+  OPEN reference plugin                          CERTIFIED per-fab plugins
+  (in-repo · no NDA)                             (private · one per fab/node 🔒)
+    • sky130A   (.rules)  ✓ M0/M3 validated        • vyges-extract-tsmc28
+    • gf180mcu  (.rules)                            • vyges-extract-sec28
+                                                    • vyges-extract-micron…
+   open data, ships with the tool                silicon-correlated coeffs +
+                                                  certified deck — under NDA
+```
+
+**sky130A is the starter / reference plugin** — open, no NDA, and already proven
+by the M0/M3 runs. Today a "plugin" is just the `.rules` deck you pass on the CLI;
+formal per-fab plugin packaging (discovery, signing, repo-per-fab) is the
+remaining open item.
+
 Getting *sign-off-grade* output on a **commercial** node takes two things beyond
 the tool running: the result must be **correlated to that foundry's silicon**,
 and the foundry must **accept the flow under an agreement**. Both live in a
