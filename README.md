@@ -61,7 +61,7 @@ route, before timing/SI sign-off.
 Run it **after detailed route** (once you have a routed `*.def`) and **before
 timing sign-off** — static timing analysis can only see wire delay and crosstalk
 if it is handed parasitics. Re-run it whenever the routing changes. The SPEF it
-emits is exactly what [`vyges-sta-si`](#) (or any STA/SI tool) consumes for net
+emits is exactly what `vyges-sta-si` (or any STA/SI tool) consumes for net
 delay. In the open RTL→GDS flow this is the **OpenRCX slot** inside LibreLane,
 between the router and the timing/SI step.
 
