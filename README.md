@@ -86,6 +86,30 @@ via      9.3                                  # default per-via resistance (ohm)
 A complete, runnable example is in [`examples/counter/`](examples/counter/);
 `vyges-extract run examples/counter/counter.ext` prints its SPEF.
 
+## Open core, certified fab plugins
+
+`vyges-extract` is open and contains **no foundry-confidential data**. It runs
+out of the box on open PDKs (sky130, gf180) using bundled reference rules.
+
+Getting *sign-off-grade* output on a **commercial** node takes two things beyond
+the tool running: the result must be **correlated to that foundry's silicon**,
+and the foundry must **accept the flow under an agreement**. Both live in a
+**separate, per-foundry plugin** — never in this repository:
+
+- the open tool defines a published **rules/calibration contract** (the `.rules`
+  schema and its calibration extensions);
+- a **certified per-foundry plugin** supplies the silicon-correlated coefficients
+  and rule sets for a specific node, delivered **under that foundry's NDA**;
+- the open engine loads it through the contract and never embeds or references
+  any foundry-confidential infrastructure. Each foundry has its own plugin.
+
+So the **engine and the contract are open for everyone**, while the **per-foundry
+correlation is gated** to those with the agreement — the same way a commercial
+extractor separates its engine from the foundry-delivered techfile, except here
+the engine is open. Use `vyges-extract` today on open PDKs and as an
+estimation/verification adjunct on any PDK you have; certified sign-off output on
+a commercial node comes with that node's plugin.
+
 ## Current state (2026-05-30)
 
 v0 is a **rule-based lumped** extractor — total grounded C and series R per net —
