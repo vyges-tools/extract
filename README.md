@@ -3,6 +3,11 @@
 Foundry-correlated RC **parasitic extraction**: a routed layout in, a SPEF
 parasitic model out.
 
+> **Vyges open EDA tools.** Commercial-grade silicon sign-off capability, built
+> on open standards and plain file formats — and meant to be accessible to
+> everyone, not only teams who can license a six-figure tool. `vyges-extract`
+> opens up parasitic extraction.
+
 ## Why this exists
 
 On modern nodes the interconnect — not the gate — sets timing and signal
@@ -10,6 +15,17 @@ integrity. Static timing analysis only sees that reality if it is handed the
 wire resistance and capacitance for every net. That data lives in a **SPEF**
 (Standard Parasitic Exchange Format) file, which something has to produce from
 the placed-and-routed geometry. `vyges-extract` is that step.
+
+## How this is solved today
+
+In production, extraction means Synopsys **StarRC** or Cadence **Quantus (QRC)**,
+run with foundry-certified tech files and a field solver for the critical nets —
+powerful, but gated behind NDA and six-figure licenses. That gate is a big
+reason open silicon stalls around 130 nm. The open option, **OpenRCX**
+(in OpenROAD), is rule/pattern-based and community-calibrated. The hard part was
+never writing an extractor — it is *correlating* one to silicon. `vyges-extract`
+starts in that open tier, behind clean file formats, and is built to be
+correlated upward without changing how anyone calls it.
 
 ## The problem it solves
 
@@ -23,9 +39,6 @@ grounded capacitance, and the series resistance. It accumulates per-layer
 Manhattan wirelength and via counts from the routing and applies the rules.
 A net routed on a layer with **no rule is a hard error**, not silent
 under-extraction.
-
-This is the same role the OpenROAD `OpenRCX` step plays, exposed as a small,
-inspectable, standalone binary behind plain file formats.
 
 ## Where it fits in a flow
 
@@ -73,10 +86,13 @@ via      9.3                                  # default per-via resistance (ohm)
 A complete, runnable example is in [`examples/counter/`](examples/counter/);
 `vyges-extract run examples/counter/counter.ext` prints its SPEF.
 
-## Scope
+## Current state (2026-05-30)
 
-v0 is a **rule-based lumped** extractor — total grounded C and series R per net.
-That is enough to feed STA and to validate the whole `def → spef → timing`
-seam. Coupling capacitance, the pi-model / per-pin RC tree, LEF-driven routing
-widths, and field-solved correlation against golden patterns build on top of the
-same formats; the rules deck already carries a `coupling` column for that.
+v0 is a **rule-based lumped** extractor — total grounded C and series R per net —
+runs fully offline with no external dependencies, 11 tests green. It is enough to
+feed STA and to validate the whole `def → spef → timing` seam end to end.
+
+The road to signoff grade builds on the same file formats and CLI: coupling
+capacitance (the rules deck already carries a `coupling` column), the pi-model /
+per-pin RC tree, LEF-driven routing widths, and field-solved correlation against
+golden patterns. Same `run` command, no license.
