@@ -1,0 +1,5 @@
+design:   counter
+def:      counter.def       # routed layout (geometry source)
+rules:    sky130.rules      # per-layer RC coefficients
+corner:   typical
+temp:     25

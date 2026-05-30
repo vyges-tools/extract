@@ -1,0 +1,123 @@
+//! SPEF (IEEE 1481) emitter.
+//!
+//! Emits a Standard Parasitic Exchange Format file with a name map and, per
+//! net, a `*D_NET` record: `*CONN` (the connected instance pins), `*CAP` (the
+//! grounded capacitance), and `*RES` (the series resistance). v0 emits a lumped
+//! model — total grounded C at the net node, one series R to the first pin —
+//! which is the coarse equivalent of OpenRCX's reduced output. The pi-model /
+//! per-pin RC tree is the correlated upgrade.
+//!
+//! Pure std — fully unit-tested offline. No timestamp is embedded unless one is
+//! passed in, so an unchanged run is bit-identical (the M2 reproducibility
+//! contract).
+
+use std::collections::BTreeMap;
+
+use crate::rc::NetParasitics;
+
+#[derive(Debug, Clone)]
+pub struct Units {
+    pub time: String, // e.g. "1 PS"
+    pub cap: String,  // e.g. "1 FF"
+    pub res: String,  // e.g. "1 OHM"
+}
+
+impl Default for Units {
+    fn default() -> Self {
+        Units { time: "1 PS".into(), cap: "1 FF".into(), res: "1 OHM".into() }
+    }
+}
+
+/// Assigns stable integer ids to names in first-seen order (deterministic).
+struct NameMap {
+    ids: BTreeMap<String, usize>,
+    order: Vec<String>,
+}
+
+impl NameMap {
+    fn new() -> NameMap {
+        NameMap { ids: BTreeMap::new(), order: Vec::new() }
+    }
+    fn intern(&mut self, name: &str) -> usize {
+        if let Some(&id) = self.ids.get(name) {
+            return id;
+        }
+        let id = self.order.len() + 1;
+        self.ids.insert(name.to_string(), id);
+        self.order.push(name.to_string());
+        id
+    }
+}
+
+fn val(v: f64) -> String {
+    format!("{v:.6}")
+}
+
+/// Render a complete SPEF for the given net parasitics.
+pub fn render(design: &str, units: &Units, date: Option<&str>, nets: &[NetParasitics]) -> String {
+    // Build the name map first: every net name, then every instance, in order.
+    let mut nm = NameMap::new();
+    let mut net_ids = Vec::with_capacity(nets.len());
+    let mut pin_ids: Vec<Vec<(usize, String)>> = Vec::with_capacity(nets.len());
+    for net in nets {
+        net_ids.push(nm.intern(&net.name));
+        let mut pins = Vec::with_capacity(net.pins.len());
+        for (inst, pin) in &net.pins {
+            pins.push((nm.intern(inst), pin.clone()));
+        }
+        pin_ids.push(pins);
+    }
+
+    let mut s = String::new();
+    s.push_str("*SPEF \"IEEE 1481-1999\"\n");
+    s.push_str(&format!("*DESIGN \"{design}\"\n"));
+    if let Some(d) = date {
+        s.push_str(&format!("*DATE \"{d}\"\n"));
+    }
+    s.push_str("*VENDOR \"Vyges\"\n");
+    s.push_str("*PROGRAM \"vyges-extract\"\n");
+    s.push_str(&format!("*VERSION \"{}\"\n", crate::VERSION));
+    s.push_str("*DIVIDER /\n");
+    s.push_str("*DELIMITER :\n");
+    s.push_str("*BUS_DELIMITER [ ]\n");
+    s.push_str(&format!("*T_UNIT {}\n", units.time));
+    s.push_str(&format!("*C_UNIT {}\n", units.cap));
+    s.push_str(&format!("*R_UNIT {}\n", units.res));
+    s.push_str("*L_UNIT 1 HENRY\n\n");
+
+    s.push_str("*NAME_MAP\n");
+    for (i, name) in nm.order.iter().enumerate() {
+        s.push_str(&format!("*{} {}\n", i + 1, name));
+    }
+    s.push('\n');
+
+    for (n, net) in nets.iter().enumerate() {
+        let nid = net_ids[n];
+        s.push_str(&format!("*D_NET *{} {}\n", nid, val(net.cap_ff)));
+
+        s.push_str("*CONN\n");
+        for (iid, pin) in &pin_ids[n] {
+            // direction unknown without LEF in v0 -> default 'I'
+            s.push_str(&format!("*I *{iid}:{pin} I\n"));
+        }
+
+        s.push_str("*CAP\n");
+        s.push_str(&format!("1 *{} {}\n", nid, val(net.cap_ff)));
+
+        if net.res_ohm > 0.0 {
+            s.push_str("*RES\n");
+            match pin_ids[n].first() {
+                Some((iid, pin)) => {
+                    s.push_str(&format!("1 *{nid} *{iid}:{pin} {}\n", val(net.res_ohm)));
+                }
+                None => {
+                    s.push_str(&format!("1 *{nid}:1 *{nid}:2 {}\n", val(net.res_ohm)));
+                }
+            }
+        }
+
+        s.push_str("*END\n\n");
+    }
+
+    s
+}
