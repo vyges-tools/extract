@@ -1,8 +1,11 @@
 //! vyges-extract CLI.
 //!
-//!   vyges-extract run   JOB [-o OUT.spef]   extract -> SPEF (rule-based, offline)
-//!   vyges-extract check JOB                 parse + validate the job, print summary
-//!   vyges-extract demo  [-o OUT.spef]       emit a sample .spef (no inputs) to show output
+//!   vyges-extract run   JOB [-o OUT] [--json]   extract -> SPEF (or JSON summary)
+//!   vyges-extract check JOB                      validate the job + inputs
+//!   vyges-extract demo  [-o OUT] [--json]        sample output (no inputs)
+//!
+//! Common flags: -h/--help, -V/--version, -q/--quiet, -v/--verbose.
+//! Exit codes: 0 ok · 1 runtime error · 2 usage/validation.
 
 use std::process::exit;
 
@@ -11,14 +14,63 @@ use vyges_extract::job::ExtractJob;
 use vyges_extract::rc::NetParasitics;
 use vyges_extract::spef::{self, Units};
 
-fn arg_after(args: &[String], flag: &str) -> Option<String> {
-    args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned()
+const USAGE: &str = "\
+vyges-extract — foundry-correlated RC parasitic extraction (DEF -> SPEF)
+
+usage:
+  vyges-extract run   JOB [-o OUT] [--json]
+  vyges-extract check JOB
+  vyges-extract demo  [-o OUT] [--json]
+
+flags:
+  -o FILE          write output to FILE (default: stdout)
+  --json           per-net parasitics summary as JSON instead of SPEF
+  -q, --quiet      suppress non-essential output
+  -v, --verbose    extra detail on stderr
+  -h, --help       show this help
+  -V, --version    show version
+";
+
+#[derive(Default)]
+struct Cli {
+    positionals: Vec<String>,
+    out: Option<String>,
+    json: bool,
+    quiet: bool,
+    verbose: bool,
+    help: bool,
+    version: bool,
 }
 
-fn write_out(text: &str, out: Option<String>) {
-    match out {
-        Some(path) => match std::fs::write(&path, text) {
-            Ok(_) => println!("wrote {path}"),
+fn parse_cli(args: &[String]) -> Cli {
+    let mut c = Cli::default();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-o" => {
+                c.out = args.get(i + 1).cloned();
+                i += 1;
+            }
+            "--json" => c.json = true,
+            "-q" | "--quiet" => c.quiet = true,
+            "-v" | "--verbose" => c.verbose = true,
+            "-h" | "--help" => c.help = true,
+            "-V" | "--version" => c.version = true,
+            other => c.positionals.push(other.to_string()),
+        }
+        i += 1;
+    }
+    c
+}
+
+fn write_out(text: &str, cli: &Cli) {
+    match &cli.out {
+        Some(path) => match std::fs::write(path, text) {
+            Ok(_) => {
+                if !cli.quiet {
+                    println!("wrote {path}");
+                }
+            }
             Err(e) => {
                 eprintln!("error: {path}: {e}");
                 exit(1);
@@ -28,8 +80,16 @@ fn write_out(text: &str, out: Option<String>) {
     }
 }
 
-fn demo_spef() -> String {
-    let nets = vec![
+fn render(design: &str, nets: &[NetParasitics], cli: &Cli) -> String {
+    if cli.json {
+        spef::render_json(design, nets)
+    } else {
+        spef::render(design, &Units::default(), None, nets)
+    }
+}
+
+fn demo_nets() -> Vec<NetParasitics> {
+    vec![
         NetParasitics {
             name: "clk".into(),
             pins: vec![("clkbuf".into(), "X".into()), ("ff0".into(), "CLK".into())],
@@ -42,18 +102,27 @@ fn demo_spef() -> String {
             res_ohm: 3.1,
             cap_ff: 1.8,
         },
-    ];
-    spef::render("vyges_extract_demo", &Units::default(), None, &nets)
+    ]
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let cmd = args.first().map(String::as_str).unwrap_or("");
-    match cmd {
-        "--version" | "-V" => println!("vyges-extract {}", vyges_extract::VERSION),
-        "demo" => write_out(&demo_spef(), arg_after(&args, "-o")),
+    let cli = parse_cli(&args);
+
+    if cli.version {
+        println!("vyges-extract {}", vyges_extract::VERSION);
+        return;
+    }
+    let cmd = cli.positionals.first().cloned().unwrap_or_default();
+    if cli.help || cmd.is_empty() {
+        print!("{USAGE}");
+        exit(if cmd.is_empty() && !cli.help { 2 } else { 0 });
+    }
+
+    match cmd.as_str() {
+        "demo" => write_out(&render("vyges_extract_demo", &demo_nets(), &cli), &cli),
         "check" => {
-            let Some(path) = args.get(1) else {
+            let Some(path) = cli.positionals.get(1) else {
                 eprintln!("usage: vyges-extract check JOB");
                 exit(2);
             };
@@ -69,8 +138,8 @@ fn main() {
             }
         }
         "run" => {
-            let Some(path) = args.get(1) else {
-                eprintln!("usage: vyges-extract run JOB [-o OUT.spef]");
+            let Some(path) = cli.positionals.get(1) else {
+                eprintln!("usage: vyges-extract run JOB [-o OUT]");
                 exit(2);
             };
             let job = match ExtractJob::load(path) {
@@ -80,19 +149,22 @@ fn main() {
                     exit(2);
                 }
             };
-            match engine::run_to_spef(&job) {
-                Ok(spef) => write_out(&spef, arg_after(&args, "-o")),
+            match engine::extract(&job) {
+                Ok(nets) => {
+                    if cli.verbose {
+                        eprintln!("extracted {} net(s) from {}", nets.len(), job.def);
+                    }
+                    write_out(&render(&job.design, &nets, &cli), &cli);
+                }
                 Err(e) => {
                     eprintln!("error: {e}");
                     exit(1);
                 }
             }
         }
-        _ => {
-            eprintln!(
-                "vyges-extract {}\nusage: vyges-extract <run|check|demo|--version>",
-                vyges_extract::VERSION
-            );
+        other => {
+            eprintln!("vyges-extract: unknown command {other:?}\n");
+            print!("{USAGE}");
             exit(2);
         }
     }

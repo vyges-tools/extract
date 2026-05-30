@@ -53,6 +53,30 @@ fn val(v: f64) -> String {
     format!("{v:.6}")
 }
 
+/// Machine-readable per-net parasitics summary (std-only, no deps).
+pub fn render_json(design: &str, nets: &[NetParasitics]) -> String {
+    let total_cap: f64 = nets.iter().map(|n| n.cap_ff).sum();
+    let total_res: f64 = nets.iter().map(|n| n.res_ohm).sum();
+    let mut s = String::new();
+    s.push_str(&format!("{{\"design\":{design:?},\"nets\":{},", nets.len()));
+    s.push_str(&format!("\"total_cap_ff\":{total_cap:.6},\"total_res_ohm\":{total_res:.6},"));
+    s.push_str("\"per_net\":[");
+    for (i, n) in nets.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str(&format!(
+            "{{\"name\":{:?},\"pins\":{},\"cap_ff\":{:.6},\"res_ohm\":{:.6}}}",
+            n.name,
+            n.pins.len(),
+            n.cap_ff,
+            n.res_ohm
+        ));
+    }
+    s.push_str("]}\n");
+    s
+}
+
 /// Render a complete SPEF for the given net parasitics.
 pub fn render(design: &str, units: &Units, date: Option<&str>, nets: &[NetParasitics]) -> String {
     // Build the name map first: every net name, then every instance, in order.

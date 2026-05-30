@@ -74,8 +74,10 @@ cargo build --release            # std-only, no external deps
 # 2. write an extraction job pointing at your DEF + rules
 # 3. extract:
 vyges-extract run  design.ext -o design.spef
+vyges-extract run  design.ext --json  # per-net R/C summary instead of SPEF
 vyges-extract check design.ext        # validate the job + inputs
 vyges-extract demo                    # print a sample SPEF (no inputs)
+# common flags: -o FILE · --json · -q/--quiet · -v/--verbose · -h/--help · -V/--version
 ```
 
 A job (`*.ext`) is a few `key: value` lines:
