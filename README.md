@@ -166,13 +166,15 @@ a commercial node comes with that node's plugin.
 
 **v1** is a **rule-based** extractor with **lateral coupling capacitance** from
 segment adjacency: grounded R/C per net plus per-net-pair coupling caps, emitted
-in SPEF (totals include coupling on both nets). Coupling has both a **lateral**
-term (edge-to-edge gap when a tech LEF supplies routing widths, centerline
-otherwise) and an **inter-layer** crossover term (areal, over footprint overlap).
-Runs fully offline, no external deps, 21 tests green. Enough to feed STA/SI and
-to validate the whole `def → spef → timing` seam end to end.
+in SPEF as a first-order **pi model** (grounded C split across the series R)
+(totals include coupling on both nets). Coupling has both a **lateral** term
+(edge-to-edge gap when a tech LEF supplies routing widths, centerline otherwise)
+and an **inter-layer** crossover term (areal, over footprint overlap). Runs fully
+offline, no external deps, 21 tests green. Enough to feed STA/SI and to validate
+the whole `def → spef → timing` seam end to end.
 
-The road to sign-off grade (M5) builds on the same file formats and CLI: the
-pi-model / per-pin RC tree, and a **field-solved 2.5-D kernel** that replaces the
-rule model and is **fit against golden patterns** — the actual M5 correlation.
-Same `run` command, no license.
+The road to sign-off grade (M5) builds on the same file formats and CLI: a
+moment-weighted pi split + per-pin RC tree (v1 is an even split to the first
+pin), and a **field-solved 2.5-D kernel** that replaces the rule model and is
+**fit against golden patterns** — the actual M5 correlation. Same `run` command,
+no license.

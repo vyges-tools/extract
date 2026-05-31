@@ -31,8 +31,10 @@ fn name_map_and_dnet() {
     assert!(s.contains("*3 ff0"));
     assert!(s.contains("*D_NET *1 0.450000")); // no coupling -> total == ground
     assert!(s.contains("*I *2:X I"));
-    assert!(s.contains("*CAP\n1 *1 0.450000"));
-    assert!(s.contains("*RES\n1 *1 *2:X 10.050000"));
+    // pi-model: ground C split in half across the series R
+    assert!(s.contains("*CAP\n1 *1 0.225000")); // far half at the net node
+    assert!(s.contains("2 *2:X 0.225000")); // near half at the driver pin
+    assert!(s.contains("*RES\n1 *1 *2:X 10.050000")); // pi resistor
     assert!(s.trim_end().ends_with("*END"));
 }
 
@@ -50,7 +52,7 @@ fn coupling_adds_to_totals_and_caps() {
     assert!(s.contains("*D_NET *1 0.480000"), "clk total"); // 0.45 + 0.03
     assert!(s.contains("*D_NET *2 0.230000"), "n0 total"); // 0.20 + 0.03
     // coupling listed once, under net A (clk), as a two-node cap entry
-    assert!(s.contains("2 *1 *2 0.030000"), "coupling cap entry\n{s}");
+    assert!(s.contains(" *1 *2 0.030000"), "coupling cap entry\n{s}");
 }
 
 #[test]

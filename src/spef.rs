@@ -2,10 +2,11 @@
 //!
 //! Emits a Standard Parasitic Exchange Format file with a name map and, per
 //! net, a `*D_NET` record: `*CONN` (the connected instance pins), `*CAP` (the
-//! grounded capacitance), and `*RES` (the series resistance). v0 emits a lumped
-//! model — total grounded C at the net node, one series R to the first pin —
-//! which is the coarse equivalent of OpenRCX's reduced output. The pi-model /
-//! per-pin RC tree is the correlated upgrade.
+//! grounded + coupling capacitance), and `*RES` (the series resistance). The
+//! net is emitted as a first-order **pi model** — half the grounded C at the
+//! net (far) node, half at the near (driver) node, bridged by the series R —
+//! a closer reduced model than a single lump. A moment-weighted split and a
+//! per-pin RC tree are the refinements.
 //!
 //! Pure std — fully unit-tested offline. No timestamp is embedded unless one is
 //! passed in, so an unchanged run is bit-identical (the M2 reproducibility
@@ -159,10 +160,36 @@ pub fn render(
             s.push_str(&format!("*I *{iid}:{pin} I\n"));
         }
 
+        // Pi-model: split the grounded C across the series R — half at the net
+        // (far/sink) node, half at the "near" node (the driver pin, or an
+        // internal node), with R between them. The near node sees its half
+        // before the wire R, the far half behind it — a first-order pi, vs all
+        // C lumped at one node. Coupling stays at the net (far) node. With no R
+        // there is nothing to split across, so it degrades to a single lump.
+        let near_node: Option<String> = if net.res_ohm > 0.0 {
+            Some(match pin_ids[n].first() {
+                Some((iid, pin)) => format!("{iid}:{pin}"),
+                None => format!("{nid}:far"),
+            })
+        } else {
+            None
+        };
+
         s.push_str("*CAP\n");
-        s.push_str(&format!("1 *{} {}\n", nid, val(net.cap_ff))); // grounded cap
-        // coupling caps listed under net A: `idx *A *B value`
-        let mut ci = 1;
+        let mut ci;
+        match &near_node {
+            Some(near) => {
+                let half = net.cap_ff / 2.0;
+                s.push_str(&format!("1 *{} {}\n", nid, val(half))); // far half (net node)
+                s.push_str(&format!("2 *{} {}\n", near, val(half))); // near half (driver)
+                ci = 2;
+            }
+            None => {
+                s.push_str(&format!("1 *{} {}\n", nid, val(net.cap_ff)));
+                ci = 1;
+            }
+        }
+        // coupling caps listed under net A at the net (far) node: `idx *A *B value`
         if let Some(list) = under.get(&net.name) {
             for c in list {
                 ci += 1;
@@ -171,16 +198,9 @@ pub fn render(
             }
         }
 
-        if net.res_ohm > 0.0 {
+        if let Some(near) = &near_node {
             s.push_str("*RES\n");
-            match pin_ids[n].first() {
-                Some((iid, pin)) => {
-                    s.push_str(&format!("1 *{nid} *{iid}:{pin} {}\n", val(net.res_ohm)));
-                }
-                None => {
-                    s.push_str(&format!("1 *{nid}:1 *{nid}:2 {}\n", val(net.res_ohm)));
-                }
-            }
+            s.push_str(&format!("1 *{nid} *{near} {}\n", val(net.res_ohm))); // pi resistor
         }
 
         s.push_str("*END\n\n");
