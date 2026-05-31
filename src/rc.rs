@@ -40,8 +40,8 @@ pub fn extract_net(net: &DefNet, rules: &RcRules) -> Result<NetParasitics, RcErr
         let l = rules.layer(&seg.layer).ok_or_else(|| {
             RcError(format!("net {}: no rule for layer {:?}", net.name, seg.layer))
         })?;
-        res_ohm += seg.len_um * l.res_per_um;
-        cap_ff += seg.len_um * l.cap_per_um;
+        res_ohm += seg.len_um() * l.res_per_um;
+        cap_ff += seg.len_um() * l.cap_per_um; // grounded cap; coupling is separate (see coupling.rs)
     }
     res_ohm += net.vias as f64 * rules.via_res;
     Ok(NetParasitics {

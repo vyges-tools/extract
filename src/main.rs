@@ -9,6 +9,7 @@
 
 use std::process::exit;
 
+use vyges_extract::coupling::CouplingCap;
 use vyges_extract::engine;
 use vyges_extract::job::ExtractJob;
 use vyges_extract::rc::NetParasitics;
@@ -80,11 +81,11 @@ fn write_out(text: &str, cli: &Cli) {
     }
 }
 
-fn render(design: &str, nets: &[NetParasitics], cli: &Cli) -> String {
+fn render(design: &str, nets: &[NetParasitics], couplings: &[CouplingCap], cli: &Cli) -> String {
     if cli.json {
-        spef::render_json(design, nets)
+        spef::render_json(design, nets, couplings)
     } else {
-        spef::render(design, &Units::default(), None, nets)
+        spef::render(design, &Units::default(), None, nets, couplings)
     }
 }
 
@@ -105,6 +106,10 @@ fn demo_nets() -> Vec<NetParasitics> {
     ]
 }
 
+fn demo_couplings() -> Vec<CouplingCap> {
+    vec![CouplingCap { a: "clk".into(), b: "n0".into(), cap_ff: 0.42 }]
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cli = parse_cli(&args);
@@ -120,7 +125,9 @@ fn main() {
     }
 
     match cmd.as_str() {
-        "demo" => write_out(&render("vyges_extract_demo", &demo_nets(), &cli), &cli),
+        "demo" => {
+            write_out(&render("vyges_extract_demo", &demo_nets(), &demo_couplings(), &cli), &cli)
+        }
         "check" => {
             let Some(path) = cli.positionals.get(1) else {
                 eprintln!("usage: vyges-extract check JOB");
@@ -150,11 +157,16 @@ fn main() {
                 }
             };
             match engine::extract(&job) {
-                Ok(nets) => {
+                Ok(ex) => {
                     if cli.verbose {
-                        eprintln!("extracted {} net(s) from {}", nets.len(), job.def);
+                        eprintln!(
+                            "extracted {} net(s), {} coupling pair(s) from {}",
+                            ex.nets.len(),
+                            ex.couplings.len(),
+                            job.def
+                        );
                     }
-                    write_out(&render(&job.design, &nets, &cli), &cli);
+                    write_out(&render(&job.design, &ex.nets, &ex.couplings, &cli), &cli);
                 }
                 Err(e) => {
                     eprintln!("error: {e}");

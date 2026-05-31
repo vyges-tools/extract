@@ -13,6 +13,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::coupling::CouplingCap;
 use crate::rc::NetParasitics;
 
 #[derive(Debug, Clone)]
@@ -47,49 +48,80 @@ impl NameMap {
         self.order.push(name.to_string());
         id
     }
+    fn id(&self, name: &str) -> Option<usize> {
+        self.ids.get(name).copied()
+    }
 }
 
 fn val(v: f64) -> String {
     format!("{v:.6}")
 }
 
-/// Machine-readable per-net parasitics summary (std-only, no deps).
-pub fn render_json(design: &str, nets: &[NetParasitics]) -> String {
-    let total_cap: f64 = nets.iter().map(|n| n.cap_ff).sum();
+/// Machine-readable per-net parasitics + coupling summary (std-only, no deps).
+pub fn render_json(design: &str, nets: &[NetParasitics], couplings: &[CouplingCap]) -> String {
+    let ground_cap: f64 = nets.iter().map(|n| n.cap_ff).sum();
     let total_res: f64 = nets.iter().map(|n| n.res_ohm).sum();
+    let total_coupling: f64 = couplings.iter().map(|c| c.cap_ff).sum::<f64>() + 0.0; // normalize -0.0
     let mut s = String::new();
     s.push_str(&format!("{{\"design\":{design:?},\"nets\":{},", nets.len()));
-    s.push_str(&format!("\"total_cap_ff\":{total_cap:.6},\"total_res_ohm\":{total_res:.6},"));
+    s.push_str(&format!(
+        "\"ground_cap_ff\":{ground_cap:.6},\"coupling_cap_ff\":{total_coupling:.6},\
+         \"total_cap_ff\":{:.6},\"total_res_ohm\":{total_res:.6},",
+        ground_cap + total_coupling
+    ));
     s.push_str("\"per_net\":[");
     for (i, n) in nets.iter().enumerate() {
         if i > 0 {
             s.push(',');
         }
         s.push_str(&format!(
-            "{{\"name\":{:?},\"pins\":{},\"cap_ff\":{:.6},\"res_ohm\":{:.6}}}",
+            "{{\"name\":{:?},\"pins\":{},\"ground_cap_ff\":{:.6},\"res_ohm\":{:.6}}}",
             n.name,
             n.pins.len(),
             n.cap_ff,
             n.res_ohm
         ));
     }
+    s.push_str("],\"couplings\":[");
+    for (i, c) in couplings.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str(&format!("{{\"a\":{:?},\"b\":{:?},\"cap_ff\":{:.6}}}", c.a, c.b, c.cap_ff));
+    }
     s.push_str("]}\n");
     s
 }
 
-/// Render a complete SPEF for the given net parasitics.
-pub fn render(design: &str, units: &Units, date: Option<&str>, nets: &[NetParasitics]) -> String {
-    // Build the name map first: every net name, then every instance, in order.
+/// Render a complete SPEF for the given net parasitics + coupling caps.
+///
+/// A coupling cap between nets A and B contributes to **both** nets' total
+/// capacitance but is listed once (under net A) in the `*CAP` section as a
+/// two-node entry, per IEEE 1481.
+pub fn render(
+    design: &str,
+    units: &Units,
+    date: Option<&str>,
+    nets: &[NetParasitics],
+    couplings: &[CouplingCap],
+) -> String {
+    // Name map: all net names first (so net ids are contiguous 1..N and coupling
+    // references stay readable), then instance names.
     let mut nm = NameMap::new();
-    let mut net_ids = Vec::with_capacity(nets.len());
-    let mut pin_ids: Vec<Vec<(usize, String)>> = Vec::with_capacity(nets.len());
-    for net in nets {
-        net_ids.push(nm.intern(&net.name));
-        let mut pins = Vec::with_capacity(net.pins.len());
-        for (inst, pin) in &net.pins {
-            pins.push((nm.intern(inst), pin.clone()));
-        }
-        pin_ids.push(pins);
+    let net_ids: Vec<usize> = nets.iter().map(|n| nm.intern(&n.name)).collect();
+    let pin_ids: Vec<Vec<(usize, String)>> = nets
+        .iter()
+        .map(|net| net.pins.iter().map(|(inst, pin)| (nm.intern(inst), pin.clone())).collect())
+        .collect();
+
+    // Per-net coupling totals (both endpoints) + the list of couplings to emit
+    // under each net (keyed by net A).
+    let mut coupling_total: BTreeMap<String, f64> = BTreeMap::new();
+    let mut under: BTreeMap<String, Vec<&CouplingCap>> = BTreeMap::new();
+    for c in couplings {
+        *coupling_total.entry(c.a.clone()).or_default() += c.cap_ff;
+        *coupling_total.entry(c.b.clone()).or_default() += c.cap_ff;
+        under.entry(c.a.clone()).or_default().push(c);
     }
 
     let mut s = String::new();
@@ -117,7 +149,9 @@ pub fn render(design: &str, units: &Units, date: Option<&str>, nets: &[NetParasi
 
     for (n, net) in nets.iter().enumerate() {
         let nid = net_ids[n];
-        s.push_str(&format!("*D_NET *{} {}\n", nid, val(net.cap_ff)));
+        let cpl = coupling_total.get(&net.name).copied().unwrap_or(0.0);
+        // total net cap = grounded + all coupling involving this net
+        s.push_str(&format!("*D_NET *{} {}\n", nid, val(net.cap_ff + cpl)));
 
         s.push_str("*CONN\n");
         for (iid, pin) in &pin_ids[n] {
@@ -126,7 +160,16 @@ pub fn render(design: &str, units: &Units, date: Option<&str>, nets: &[NetParasi
         }
 
         s.push_str("*CAP\n");
-        s.push_str(&format!("1 *{} {}\n", nid, val(net.cap_ff)));
+        s.push_str(&format!("1 *{} {}\n", nid, val(net.cap_ff))); // grounded cap
+        // coupling caps listed under net A: `idx *A *B value`
+        let mut ci = 1;
+        if let Some(list) = under.get(&net.name) {
+            for c in list {
+                ci += 1;
+                let bid = nm.id(&c.b).unwrap_or(nid);
+                s.push_str(&format!("{ci} *{nid} *{bid} {}\n", val(c.cap_ff)));
+            }
+        }
 
         if net.res_ohm > 0.0 {
             s.push_str("*RES\n");

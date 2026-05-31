@@ -8,15 +8,17 @@
 //! Boundaries (per the Vyges flow architecture): inputs and outputs are files
 //! (DEF + RC rules in, SPEF out). The v0 model is a pure-std *rule-based*
 //! extractor — analytic R/C from geometry, no subprocess — so the whole engine
-//! (DEF parse, RC model, SPEF emit) is exercised offline and unit-tested. The
-//! *correlated* upgrade (field-solve coupling caps, fit vs golden patterns) is
-//! the part that will shell out to the EDA environment; the engine error type
-//! already reserves that path (`ExtractError::FieldSolverNotFound`).
+//! (DEF parse, RC model, coupling, SPEF emit) is exercised offline and
+//! unit-tested. v1 adds **lateral coupling capacitance** from segment adjacency
+//! (`coupling`); the field-solved 2.5-D kernel + golden-pattern fit (M5) replace
+//! that model behind the same SPEF output (`ExtractError::FieldSolverNotFound`
+//! reserves the shell-out path).
 
 pub mod job;
 pub mod rules;
 pub mod def;
 pub mod rc;
+pub mod coupling;
 pub mod spef;
 pub mod engine;
 

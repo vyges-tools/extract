@@ -10,12 +10,15 @@ fn example_counter_extracts_to_spef() {
     let spef = run_to_spef(&job).unwrap();
 
     assert!(spef.contains("*DESIGN \"counter\""));
-    // clk: R = 3*0.125 + 3*0.125 + 1*9.3 = 10.05 ; C = 3*0.078 + 3*0.072 = 0.45
     assert!(spef.contains("*1 clk"));
-    assert!(spef.contains("*D_NET *1 0.450000"));
-    assert!(spef.contains("10.050000"));
-    // n0: R = 0.8*0.125 + 0.3*12.8 = 3.94 ; C = 0.8*0.078 + 0.3*0.060 = 0.0804
-    assert!(spef.contains("*D_NET"));
-    assert!(spef.contains("3.940000"));
-    assert!(spef.contains("0.080400"));
+    // clk/n0 met1 verticals run parallel: gap 1.0um, overlap 0.8um, met1 coupling
+    // 0.050 fF/um at s_ref 0.14um -> Cc = 0.050 * 0.8 * (0.14/1.0) = 0.0056 fF.
+    // clk total = ground 0.45 + coupling 0.0056 = 0.4556
+    assert!(spef.contains("*D_NET *1 0.455600"), "clk total\n{spef}");
+    assert!(spef.contains("*CAP\n1 *1 0.450000")); // grounded portion
+    assert!(spef.contains("2 *1 *2 0.005600"), "coupling cap clk-n0\n{spef}");
+    // n0 total = ground 0.0804 + coupling 0.0056 = 0.086
+    assert!(spef.contains("*D_NET *2 0.086000"), "n0 total");
+    assert!(spef.contains("10.050000")); // clk res
+    assert!(spef.contains("3.940000")); // n0 res
 }

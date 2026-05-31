@@ -28,9 +28,9 @@ fn parses_pins_segments_vias() {
     // met1 3um + met2 3um (the via token does not break the run's geometry)
     assert_eq!(clk.segments.len(), 2);
     assert_eq!(clk.segments[0].layer, "met1");
-    assert!((clk.segments[0].len_um - 3.0).abs() < 1e-9);
+    assert!((clk.segments[0].len_um() - 3.0).abs() < 1e-9);
     assert_eq!(clk.segments[1].layer, "met2");
-    assert!((clk.segments[1].len_um - 3.0).abs() < 1e-9);
+    assert!((clk.segments[1].len_um() - 3.0).abs() < 1e-9);
     assert_eq!(clk.vias, 1);
 }
 
@@ -47,6 +47,6 @@ fn star_coordinate_reuses_previous() {
     let a = &d.nets[0];
     // (0,0)->(0,4000)=4um, (0,4000)->(2000,4000)=2um
     assert_eq!(a.segments.len(), 2);
-    assert!((a.segments[0].len_um - 4.0).abs() < 1e-9);
-    assert!((a.segments[1].len_um - 2.0).abs() < 1e-9);
+    assert!((a.segments[0].len_um() - 4.0).abs() < 1e-9);
+    assert!((a.segments[1].len_um() - 2.0).abs() < 1e-9);
 }

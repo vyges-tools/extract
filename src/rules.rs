@@ -21,14 +21,21 @@ use std::collections::BTreeMap;
 pub struct LayerRc {
     pub res_per_um: f64,      // ohm / um
     pub cap_per_um: f64,      // fF / um (grounded)
-    pub coupling_per_um: f64, // fF / um (reserved for correlated extraction)
+    pub coupling_per_um: f64, // fF / um of parallel run, at the reference spacing s_ref
+    pub s_ref: f64,           // um — spacing at which coupling_per_um is specified
 }
 
 #[derive(Debug, Clone)]
 pub struct RcRules {
     pub layers: BTreeMap<String, LayerRc>,
-    pub via_res: f64, // default ohm per via cut
+    pub via_res: f64,        // default ohm per via cut
+    pub couple_cutoff: f64,  // um — ignore lateral coupling beyond this gap
 }
+
+/// Default reference spacing (um) when a layer omits its 5th column.
+const DEFAULT_S_REF: f64 = 0.2;
+/// Default lateral-coupling cutoff distance (um).
+const DEFAULT_COUPLE_CUTOFF: f64 = 2.0;
 
 #[derive(Debug)]
 pub struct RulesError(pub String);
@@ -55,6 +62,7 @@ impl RcRules {
     pub fn parse(text: &str) -> Result<RcRules, RulesError> {
         let mut layers = BTreeMap::new();
         let mut via_res = 0.0;
+        let mut couple_cutoff = DEFAULT_COUPLE_CUTOFF;
         for raw in text.lines() {
             let toks: Vec<&str> = strip_comment(raw).split_whitespace().collect();
             if toks.is_empty() {
@@ -73,10 +81,14 @@ impl RcRules {
                 via_res = num(toks.get(1).copied().unwrap_or(""), "via res")?;
                 continue;
             }
+            if toks[0].eq_ignore_ascii_case("couple_cutoff") {
+                couple_cutoff = num(toks.get(1).copied().unwrap_or(""), "couple_cutoff")?;
+                continue;
+            }
             let name = toks[0].to_string();
             if toks.len() < 3 {
                 return Err(RulesError(format!(
-                    "layer {name:?}: expected `name res cap [coupling]`"
+                    "layer {name:?}: expected `name res cap [coupling [s_ref]]`"
                 )));
             }
             let layer = LayerRc {
@@ -86,13 +98,17 @@ impl RcRules {
                     Some(t) => num(t, &format!("{name} coupling"))?,
                     None => 0.0,
                 },
+                s_ref: match toks.get(4) {
+                    Some(t) => num(t, &format!("{name} s_ref"))?,
+                    None => DEFAULT_S_REF,
+                },
             };
             layers.insert(name, layer);
         }
         if layers.is_empty() {
             return Err(RulesError("no layers defined".into()));
         }
-        Ok(RcRules { layers, via_res })
+        Ok(RcRules { layers, via_res, couple_cutoff })
     }
 
     pub fn load(path: &str) -> Result<RcRules, RulesError> {

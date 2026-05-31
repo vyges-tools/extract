@@ -35,10 +35,13 @@ Given:
 - a **per-layer RC rules deck** (`*.rules` — ohms/µm and fF/µm per metal layer),
 
 it emits an **IEEE-1481 SPEF** (`*.spef`): per net, the connected pins, the
-grounded capacitance, and the series resistance. It accumulates per-layer
-Manhattan wirelength and via counts from the routing and applies the rules.
-A net routed on a layer with **no rule is a hard error**, not silent
-under-extraction.
+grounded capacitance, the series resistance, and — the hardest, highest-value
+term — the **lateral coupling capacitance** to neighbouring nets. Grounded R/C
+come from per-layer Manhattan wirelength × the rules; coupling comes from
+**geometric adjacency**: same-layer segments of different nets that run parallel
+and overlap couple by `coupling_per_um × overlap × (s_ref/gap)`, ignored beyond
+`couple_cutoff`. A net routed on a layer with **no rule is a hard error**, not
+silent under-extraction.
 
 ## Where it fits in a flow
 
@@ -94,9 +97,10 @@ temp:   25
 A rules deck is a whitespace table:
 
 ```text
-# layer  res(ohm/um)  cap(fF/um)  [coupling(fF/um)]
-met1     0.125        0.078       0.050
-via      9.3                                  # default per-via resistance (ohm)
+# layer  res(ohm/um)  cap(fF/um)  [coupling(fF/um)]  [s_ref(um)]
+met1     0.125        0.078       0.050              0.14
+via      9.3                          # default per-via resistance (ohm)
+couple_cutoff 2.0                     # um — ignore coupling beyond this gap
 ```
 
 A complete, runnable example is in [`examples/counter/`](examples/counter/);
@@ -152,13 +156,16 @@ the engine is open. Use `vyges-extract` today on open PDKs and as an
 estimation/verification adjunct on any PDK you have; certified sign-off output on
 a commercial node comes with that node's plugin.
 
-## Current state (2026-05-30)
+## Current state (2026-05-31)
 
-v0 is a **rule-based lumped** extractor — total grounded C and series R per net —
-runs fully offline with no external dependencies, 11 tests green. It is enough to
-feed STA and to validate the whole `def → spef → timing` seam end to end.
+**v1** is a **rule-based** extractor with **lateral coupling capacitance** from
+segment adjacency: grounded R/C per net plus per-net-pair coupling caps, emitted
+in SPEF (totals include coupling on both nets). Runs fully offline, no external
+deps, 16 tests green. Enough to feed STA/SI and to validate the whole
+`def → spef → timing` seam end to end.
 
-The road to signoff grade builds on the same file formats and CLI: coupling
-capacitance (the rules deck already carries a `coupling` column), the pi-model /
-per-pin RC tree, LEF-driven routing widths, and field-solved correlation against
-golden patterns. Same `run` command, no license.
+The road to sign-off grade (M5) builds on the same file formats and CLI:
+edge-to-edge gap from LEF wire widths (v1 uses centerlines), inter-layer
+(crossover) coupling, the pi-model / per-pin RC tree, and a **field-solved
+2.5-D kernel** that replaces the rule model and is **fit against golden
+patterns** — the actual M5 correlation. Same `run` command, no license.

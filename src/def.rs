@@ -14,7 +14,23 @@
 #[derive(Debug, Clone)]
 pub struct Segment {
     pub layer: String,
-    pub len_um: f64,
+    pub x0: f64,
+    pub y0: f64,
+    pub x1: f64,
+    pub y1: f64,
+}
+
+impl Segment {
+    /// Manhattan length in microns.
+    pub fn len_um(&self) -> f64 {
+        (self.x1 - self.x0).abs() + (self.y1 - self.y0).abs()
+    }
+    pub fn is_horizontal(&self) -> bool {
+        (self.y1 - self.y0).abs() < 1e-9 && (self.x1 - self.x0).abs() > 1e-9
+    }
+    pub fn is_vertical(&self) -> bool {
+        (self.x1 - self.x0).abs() < 1e-9 && (self.y1 - self.y0).abs() > 1e-9
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -162,9 +178,14 @@ pub fn parse(text: &str) -> Result<Def, DefError> {
                         let x = coord(&inner[0], px, scale)?;
                         let y = coord(&inner[1], py, scale)?;
                         if let (Some(l), Some((ox, oy))) = (&layer, prev) {
-                            let len = (x - ox).abs() + (y - oy).abs();
-                            if len > 0.0 {
-                                net.segments.push(Segment { layer: l.clone(), len_um: len });
+                            if (x - ox).abs() + (y - oy).abs() > 0.0 {
+                                net.segments.push(Segment {
+                                    layer: l.clone(),
+                                    x0: ox,
+                                    y0: oy,
+                                    x1: x,
+                                    y1: y,
+                                });
                             }
                         }
                         prev = Some((x, y));
