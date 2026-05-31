@@ -174,6 +174,16 @@ and an **inter-layer** crossover term (areal, over footprint overlap). Runs full
 offline, no external deps, 21 tests green. Enough to feed STA/SI and to validate
 the whole `def → spef → timing` seam end to end.
 
+**Correlated against OpenRCX** on a real routed sky130 block (the M0 counter, 45
+signal nets, LEF-derived rules from `sky130_fd_sc_hd__nom.tlef`): raw first-principles
+rules over-estimate total net cap by ~1.39× (consistent, not random — 45/45 nets
+match, no correctness defect); the over-count is dominated by the rule-based lateral
+coupling term, and **calibrating it against the golden lands the block total within
+~2 % and the per-net cap within ±25 %**. That ±25 % per-net spread is the rule-based
+ceiling (real neighbor distances/density a per-µm coefficient can't resolve) — which
+is exactly what the M5 field solve closes. See the strategy repo's
+`extract-openrcx-correlation.md`.
+
 The road to sign-off grade (M5) builds on the same file formats and CLI: a
 **geometry-aware, moment-weighted tree** (v1 apportions uniformly, with no
 per-pin distances yet), and a **field-solved 2.5-D kernel** that replaces the
