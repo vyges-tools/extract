@@ -7,4 +7,8 @@ met1      0.125       0.078       0.050            0.14
 met2      0.125       0.072       0.044            0.14
 met3      0.047       0.068       0.040            0.30
 via       9.3
-couple_cutoff 2.0     # um — ignore coupling between wires farther apart than this
+couple_cutoff 2.0     # um — ignore lateral coupling between wires farther apart than this
+# inter-layer (crossover) areal coupling, fF/um^2 (needs LEF widths):
+interlayer li1  met1  0.030
+interlayer met1 met2  0.035
+interlayer met2 met3  0.032

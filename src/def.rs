@@ -31,6 +31,20 @@ impl Segment {
     pub fn is_vertical(&self) -> bool {
         (self.x1 - self.x0).abs() < 1e-9 && (self.y1 - self.y0).abs() > 1e-9
     }
+    /// Footprint rectangle (xmin, ymin, xmax, ymax) when swept by `width`.
+    /// The centerline is widened by width/2 on each side (perpendicular).
+    pub fn footprint(&self, width: f64) -> (f64, f64, f64, f64) {
+        let hw = width / 2.0;
+        let (xlo, xhi) = (self.x0.min(self.x1), self.x0.max(self.x1));
+        let (ylo, yhi) = (self.y0.min(self.y1), self.y0.max(self.y1));
+        if self.is_horizontal() {
+            (xlo, ylo - hw, xhi, yhi + hw)
+        } else if self.is_vertical() {
+            (xlo - hw, ylo, xhi + hw, yhi)
+        } else {
+            (xlo, ylo, xhi, yhi)
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

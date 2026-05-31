@@ -43,8 +43,9 @@ come from per-layer Manhattan wirelength × the rules; coupling comes from
 and overlap couple by `coupling_per_um × overlap × (s_ref/gap)`, ignored beyond
 `couple_cutoff`. The `gap` is the true **edge-to-edge** spacing when a LEF gives
 the routing widths (`gap = centerline − (w_a+w_b)/2`), or the centerline distance
-without one. A net routed on a layer with **no rule is a hard error**, not silent
-under-extraction.
+without one. Wires that **cross on different layers** add an *inter-layer* term —
+`interlayer[A,B] × footprint-overlap-area` (needs LEF widths). A net routed on a
+layer with **no rule is a hard error**, not silent under-extraction.
 
 ## Where it fits in a flow
 
@@ -104,7 +105,8 @@ A rules deck is a whitespace table:
 # layer  res(ohm/um)  cap(fF/um)  [coupling(fF/um)]  [s_ref(um)]
 met1     0.125        0.078       0.050              0.14
 via      9.3                          # default per-via resistance (ohm)
-couple_cutoff 2.0                     # um — ignore coupling beyond this gap
+couple_cutoff 2.0                     # um — ignore lateral coupling beyond this gap
+interlayer met1 met2 0.035            # fF/um^2 areal coupling where layers cross
 ```
 
 A complete, runnable example is in [`examples/counter/`](examples/counter/);
@@ -164,12 +166,13 @@ a commercial node comes with that node's plugin.
 
 **v1** is a **rule-based** extractor with **lateral coupling capacitance** from
 segment adjacency: grounded R/C per net plus per-net-pair coupling caps, emitted
-in SPEF (totals include coupling on both nets). Coupling uses the **edge-to-edge
-gap** when a tech LEF supplies routing widths (centerline otherwise). Runs fully
-offline, no external deps, 19 tests green. Enough to feed STA/SI and to validate
-the whole `def → spef → timing` seam end to end.
+in SPEF (totals include coupling on both nets). Coupling has both a **lateral**
+term (edge-to-edge gap when a tech LEF supplies routing widths, centerline
+otherwise) and an **inter-layer** crossover term (areal, over footprint overlap).
+Runs fully offline, no external deps, 21 tests green. Enough to feed STA/SI and
+to validate the whole `def → spef → timing` seam end to end.
 
-The road to sign-off grade (M5) builds on the same file formats and CLI:
-inter-layer (crossover) coupling, the pi-model / per-pin RC tree, and a
-**field-solved 2.5-D kernel** that replaces the rule model and is **fit against
-golden patterns** — the actual M5 correlation. Same `run` command, no license.
+The road to sign-off grade (M5) builds on the same file formats and CLI: the
+pi-model / per-pin RC tree, and a **field-solved 2.5-D kernel** that replaces the
+rule model and is **fit against golden patterns** — the actual M5 correlation.
+Same `run` command, no license.

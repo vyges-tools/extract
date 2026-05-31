@@ -49,6 +49,13 @@ fn overlap_gap(a: &Segment, b: &Segment) -> Option<(f64, f64)> {
     }
 }
 
+/// Overlap area of two axis-aligned rectangles (xmin, ymin, xmax, ymax).
+fn rect_overlap(a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)) -> f64 {
+    let dx = (a.2.min(b.2) - a.0.max(b.0)).max(0.0);
+    let dy = (a.3.min(b.3) - a.1.max(b.1)).max(0.0);
+    dx * dy
+}
+
 /// Coupling caps between every pair of nets — one aggregated entry per net pair.
 ///
 /// `widths` maps layer → default routing width (um, from LEF). When present the
@@ -67,17 +74,27 @@ pub fn extract_coupling(
             let mut cc = 0.0;
             for sa in &na.segments {
                 for sb in &nb.segments {
-                    let Some((ov, center_gap)) = overlap_gap(sa, sb) else { continue };
-                    let Some(l) = rules.layer(&sa.layer) else { continue };
-                    if l.coupling_per_um <= 0.0 {
-                        continue;
+                    if sa.layer == sb.layer {
+                        // lateral coupling: parallel same-layer runs, edge-to-edge gap
+                        let Some((ov, center_gap)) = overlap_gap(sa, sb) else { continue };
+                        let Some(l) = rules.layer(&sa.layer) else { continue };
+                        if l.coupling_per_um <= 0.0 {
+                            continue;
+                        }
+                        let gap = center_gap - width(&sa.layer);
+                        if gap > rules.couple_cutoff {
+                            continue;
+                        }
+                        cc += l.coupling_per_um * ov * (l.s_ref / gap.max(l.s_ref));
+                    } else if let Some(coeff) = rules.interlayer(&sa.layer, &sb.layer) {
+                        // inter-layer (crossover) coupling: areal cap over the
+                        // footprint overlap (needs widths -> zero without a LEF).
+                        let area = rect_overlap(
+                            sa.footprint(width(&sa.layer)),
+                            sb.footprint(width(&sb.layer)),
+                        );
+                        cc += coeff * area;
                     }
-                    // edge-to-edge gap; both segments are on the same layer
-                    let gap = center_gap - width(&sa.layer);
-                    if gap > rules.couple_cutoff {
-                        continue;
-                    }
-                    cc += l.coupling_per_um * ov * (l.s_ref / gap.max(l.s_ref));
                 }
             }
             if cc > 0.0 {

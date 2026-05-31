@@ -30,6 +30,18 @@ pub struct RcRules {
     pub layers: BTreeMap<String, LayerRc>,
     pub via_res: f64,        // default ohm per via cut
     pub couple_cutoff: f64,  // um — ignore lateral coupling beyond this gap
+    /// Areal coupling (fF/um^2) between a pair of (different) layers whose
+    /// footprints overlap — keyed by the layer names sorted ascending.
+    pub interlayer: BTreeMap<(String, String), f64>,
+}
+
+/// Order-independent key for a layer pair.
+fn pair_key(a: &str, b: &str) -> (String, String) {
+    if a <= b {
+        (a.to_string(), b.to_string())
+    } else {
+        (b.to_string(), a.to_string())
+    }
 }
 
 /// Default reference spacing (um) when a layer omits its 5th column.
@@ -63,6 +75,7 @@ impl RcRules {
         let mut layers = BTreeMap::new();
         let mut via_res = 0.0;
         let mut couple_cutoff = DEFAULT_COUPLE_CUTOFF;
+        let mut interlayer = BTreeMap::new();
         for raw in text.lines() {
             let toks: Vec<&str> = strip_comment(raw).split_whitespace().collect();
             if toks.is_empty() {
@@ -83,6 +96,16 @@ impl RcRules {
             }
             if toks[0].eq_ignore_ascii_case("couple_cutoff") {
                 couple_cutoff = num(toks.get(1).copied().unwrap_or(""), "couple_cutoff")?;
+                continue;
+            }
+            if toks[0].eq_ignore_ascii_case("interlayer") {
+                let a = toks.get(1).copied().unwrap_or("");
+                let b = toks.get(2).copied().unwrap_or("");
+                if a.is_empty() || b.is_empty() {
+                    return Err(RulesError("interlayer needs `layerA layerB fF/um2`".into()));
+                }
+                let c = num(toks.get(3).copied().unwrap_or(""), "interlayer coeff")?;
+                interlayer.insert(pair_key(a, b), c);
                 continue;
             }
             let name = toks[0].to_string();
@@ -108,7 +131,7 @@ impl RcRules {
         if layers.is_empty() {
             return Err(RulesError("no layers defined".into()));
         }
-        Ok(RcRules { layers, via_res, couple_cutoff })
+        Ok(RcRules { layers, via_res, couple_cutoff, interlayer })
     }
 
     pub fn load(path: &str) -> Result<RcRules, RulesError> {
@@ -118,5 +141,10 @@ impl RcRules {
 
     pub fn layer(&self, name: &str) -> Option<&LayerRc> {
         self.layers.get(name)
+    }
+
+    /// Areal coupling (fF/um^2) between two layers, if defined (order-independent).
+    pub fn interlayer(&self, a: &str, b: &str) -> Option<f64> {
+        self.interlayer.get(&pair_key(a, b)).copied()
     }
 }

@@ -60,9 +60,49 @@ fn lef_width_uses_edge_gap() {
 }
 
 #[test]
-fn different_layers_dont_couple() {
+fn different_layers_dont_couple_laterally() {
+    // no `interlayer` rule -> different layers contribute nothing
     let rules = RcRules::parse("met1 0.1 0.05 0.1 0.5\nmet2 0.1 0.05 0.1 0.5\n").unwrap();
     let mut b = hnet("b", 0.0, 3.0, 0.5);
     b.segments[0].layer = "met2".into();
     assert!(extract_coupling(&[hnet("a", 0.0, 3.0, 0.0), b], &rules, &no_widths()).is_empty());
+}
+
+fn seg(layer: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> DefNet {
+    DefNet {
+        name: layer.into(),
+        pins: vec![],
+        segments: vec![Segment { layer: layer.into(), x0, y0, x1, y1 }],
+        vias: 0,
+    }
+}
+
+#[test]
+fn interlayer_crossover_couples_by_area() {
+    let rules =
+        RcRules::parse("met1 0.1 0.05 0.0\nmet2 0.1 0.05 0.0\ninterlayer met1 met2 0.02\n").unwrap();
+    let mut widths = BTreeMap::new();
+    widths.insert("met1".to_string(), 0.4);
+    widths.insert("met2".to_string(), 0.5);
+    // met1 horizontal x[0,4] @ y2 (footprint y[1.8,2.2]); met2 vertical x2 y[0,4] (x[1.75,2.25])
+    let mut a = seg("met1", 0.0, 2.0, 4.0, 2.0);
+    a.name = "a".into();
+    let mut b = seg("met2", 2.0, 0.0, 2.0, 4.0);
+    b.name = "b".into();
+    let cc = extract_coupling(&[a, b], &rules, &widths);
+    assert_eq!(cc.len(), 1);
+    // overlap area = 0.5 (x) * 0.4 (y) = 0.2 ; Cc = 0.02 * 0.2 = 0.004
+    assert!((cc[0].cap_ff - 0.004).abs() < 1e-9, "cc={}", cc[0].cap_ff);
+}
+
+#[test]
+fn interlayer_needs_widths() {
+    let rules =
+        RcRules::parse("met1 0.1 0.05 0.0\nmet2 0.1 0.05 0.0\ninterlayer met1 met2 0.02\n").unwrap();
+    let mut a = seg("met1", 0.0, 2.0, 4.0, 2.0);
+    a.name = "a".into();
+    let mut b = seg("met2", 2.0, 0.0, 2.0, 4.0);
+    b.name = "b".into();
+    // zero-width footprints -> no overlap area -> no coupling
+    assert!(extract_coupling(&[a, b], &rules, &no_widths()).is_empty());
 }
