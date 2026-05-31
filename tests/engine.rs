@@ -16,10 +16,14 @@ fn example_counter_extracts_to_spef() {
     // 0.14um -> Cc = 0.050 * 0.8 * (0.14/0.86) = 0.006512 fF.
     // clk total = ground 0.45 + coupling 0.006512 = 0.456512
     assert!(spef.contains("*D_NET *1 0.456512"), "clk total\n{spef}");
-    assert!(spef.contains("*CAP\n1 *1 0.225000")); // pi: far half of the 0.45 ground cap
+    // per-pin RC tree: driver clkbuf (node 3) near-half 0.225, two sinks share
+    // the far half (0.1125 each); trunk R/2, branches R/4 from the net root.
+    assert!(spef.contains("*CAP\n1 *3:X 0.225000"), "driver near cap\n{spef}");
+    assert!(spef.contains("2 *4:CLK 0.112500"), "sink cap share\n{spef}");
+    assert!(spef.contains("1 *1 *3:X 5.025000"), "trunk R/2\n{spef}");
     assert!(spef.contains(" *1 *2 0.006512"), "coupling cap clk-n0\n{spef}");
     // n0 total = ground 0.0804 + coupling 0.006512 = 0.086912
     assert!(spef.contains("*D_NET *2 0.086912"), "n0 total");
-    assert!(spef.contains("10.050000")); // clk res
-    assert!(spef.contains("3.940000")); // n0 res
+    // n0 (driver u0 + 1 sink u1): R 3.94 split into trunk + branch, 1.97 each
+    assert!(spef.contains(" *2 *6:Y 1.970000"), "n0 trunk\n{spef}");
 }

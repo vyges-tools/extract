@@ -3,10 +3,10 @@
 //! Emits a Standard Parasitic Exchange Format file with a name map and, per
 //! net, a `*D_NET` record: `*CONN` (the connected instance pins), `*CAP` (the
 //! grounded + coupling capacitance), and `*RES` (the series resistance). The
-//! net is emitted as a first-order **pi model** — half the grounded C at the
-//! net (far) node, half at the near (driver) node, bridged by the series R —
-//! a closer reduced model than a single lump. A moment-weighted split and a
-//! per-pin RC tree are the refinements.
+//! net is emitted as a **per-pin RC tree** — a star rooted at the net node with
+//! a trunk R/2 + near-half C to the driver and a branch R/2K + cap share to each
+//! sink — which reduces to a pi for a single sink and a lump with no R. A
+//! moment-weighted, geometry-aware tree is the refinement.
 //!
 //! Pure std — fully unit-tested offline. No timestamp is embedded unless one is
 //! passed in, so an unchanged run is bit-identical (the M2 reproducibility
@@ -160,36 +160,52 @@ pub fn render(
             s.push_str(&format!("*I *{iid}:{pin} I\n"));
         }
 
-        // Pi-model: split the grounded C across the series R — half at the net
-        // (far/sink) node, half at the "near" node (the driver pin, or an
-        // internal node), with R between them. The near node sees its half
-        // before the wire R, the far half behind it — a first-order pi, vs all
-        // C lumped at one node. Coupling stays at the net (far) node. With no R
-        // there is nothing to split across, so it degrades to a single lump.
-        let near_node: Option<String> = if net.res_ohm > 0.0 {
-            Some(match pin_ids[n].first() {
-                Some((iid, pin)) => format!("{iid}:{pin}"),
-                None => format!("{nid}:far"),
-            })
-        } else {
-            None
-        };
+        // Per-pin RC tree: a star rooted at the net node. The driver (pin 0) is
+        // the near end — half the grounded C and the trunk R/2; the sinks share
+        // the far half, each on its own branch (cap (C/2)/K, branch R/2K to the
+        // root). This differentiates sinks (vs lumping the far C at one node)
+        // and reduces to the pi for a single sink. Degrades to a 2-node pi for
+        // one pin, and to a single lump with no series R. Uniform apportionment
+        // (no per-pin geometry yet); coupling stays at the root (net node).
+        let g = net.cap_ff;
+        let r = net.res_ohm;
+        let pins = &pin_ids[n];
+        let mut caps: Vec<(String, f64)> = Vec::new(); // (node, grounded cap)
+        let mut res_lines: Vec<(String, String, f64)> = Vec::new(); // (a, b, ohm)
+        let node = |iid: usize, pin: &str| format!("{iid}:{pin}");
 
-        s.push_str("*CAP\n");
-        let mut ci;
-        match &near_node {
-            Some(near) => {
-                let half = net.cap_ff / 2.0;
-                s.push_str(&format!("1 *{} {}\n", nid, val(half))); // far half (net node)
-                s.push_str(&format!("2 *{} {}\n", near, val(half))); // near half (driver)
-                ci = 2;
-            }
-            None => {
-                s.push_str(&format!("1 *{} {}\n", nid, val(net.cap_ff)));
-                ci = 1;
+        if r <= 0.0 {
+            caps.push((format!("{nid}"), g)); // single lump
+        } else if pins.is_empty() {
+            caps.push((format!("{nid}"), g / 2.0));
+            caps.push((format!("{nid}:far"), g / 2.0));
+            res_lines.push((format!("{nid}"), format!("{nid}:far"), r));
+        } else {
+            let (diid, dpin) = &pins[0]; // driver = pin 0
+            let dnode = node(*diid, dpin);
+            caps.push((dnode.clone(), g / 2.0)); // near half
+            let sinks = &pins[1..];
+            if sinks.is_empty() {
+                caps.push((format!("{nid}"), g / 2.0)); // far half at root
+                res_lines.push((format!("{nid}"), dnode, r));
+            } else {
+                res_lines.push((format!("{nid}"), dnode, r / 2.0)); // trunk
+                let k = sinks.len() as f64;
+                for (siid, spin) in sinks {
+                    let sn = node(*siid, spin);
+                    caps.push((sn.clone(), (g / 2.0) / k));
+                    res_lines.push((format!("{nid}"), sn, r / 2.0 / k)); // branch
+                }
             }
         }
-        // coupling caps listed under net A at the net (far) node: `idx *A *B value`
+
+        s.push_str("*CAP\n");
+        let mut ci = 0;
+        for (n_, c) in &caps {
+            ci += 1;
+            s.push_str(&format!("{ci} *{n_} {}\n", val(*c)));
+        }
+        // coupling caps listed under net A at the root (net node)
         if let Some(list) = under.get(&net.name) {
             for c in list {
                 ci += 1;
@@ -197,10 +213,11 @@ pub fn render(
                 s.push_str(&format!("{ci} *{nid} *{bid} {}\n", val(c.cap_ff)));
             }
         }
-
-        if let Some(near) = &near_node {
+        if !res_lines.is_empty() {
             s.push_str("*RES\n");
-            s.push_str(&format!("1 *{nid} *{near} {}\n", val(net.res_ohm))); // pi resistor
+            for (i, (a, b, ohm)) in res_lines.iter().enumerate() {
+                s.push_str(&format!("{} *{a} *{b} {}\n", i + 1, val(*ohm)));
+            }
         }
 
         s.push_str("*END\n\n");

@@ -31,10 +31,12 @@ fn name_map_and_dnet() {
     assert!(s.contains("*3 ff0"));
     assert!(s.contains("*D_NET *1 0.450000")); // no coupling -> total == ground
     assert!(s.contains("*I *2:X I"));
-    // pi-model: ground C split in half across the series R
-    assert!(s.contains("*CAP\n1 *1 0.225000")); // far half at the net node
-    assert!(s.contains("2 *2:X 0.225000")); // near half at the driver pin
-    assert!(s.contains("*RES\n1 *1 *2:X 10.050000")); // pi resistor
+    // per-pin RC tree (driver clkbuf + 1 sink ff0): C split to pin nodes,
+    // trunk + branch each R/2 from the net-node root
+    assert!(s.contains("*CAP\n1 *2:X 0.225000")); // near half at the driver
+    assert!(s.contains("2 *3:CLK 0.225000")); // far half at the sink
+    assert!(s.contains("*RES\n1 *1 *2:X 5.025000")); // trunk net->driver
+    assert!(s.contains("2 *1 *3:CLK 5.025000")); // branch net->sink
     assert!(s.trim_end().ends_with("*END"));
 }
 
