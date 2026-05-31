@@ -31,8 +31,9 @@ correlated upward without changing how anyone calls it.
 
 Given:
 
-- a **routed design** (`*.def` — the wire geometry), and
-- a **per-layer RC rules deck** (`*.rules` — ohms/µm and fF/µm per metal layer),
+- a **routed design** (`*.def` — the wire geometry),
+- a **per-layer RC rules deck** (`*.rules` — ohms/µm and fF/µm per metal layer), and
+- *(optional)* a **tech LEF** (`*.lef`) for per-layer routing widths,
 
 it emits an **IEEE-1481 SPEF** (`*.spef`): per net, the connected pins, the
 grounded capacitance, the series resistance, and — the hardest, highest-value
@@ -40,8 +41,10 @@ term — the **lateral coupling capacitance** to neighbouring nets. Grounded R/C
 come from per-layer Manhattan wirelength × the rules; coupling comes from
 **geometric adjacency**: same-layer segments of different nets that run parallel
 and overlap couple by `coupling_per_um × overlap × (s_ref/gap)`, ignored beyond
-`couple_cutoff`. A net routed on a layer with **no rule is a hard error**, not
-silent under-extraction.
+`couple_cutoff`. The `gap` is the true **edge-to-edge** spacing when a LEF gives
+the routing widths (`gap = centerline − (w_a+w_b)/2`), or the centerline distance
+without one. A net routed on a layer with **no rule is a hard error**, not silent
+under-extraction.
 
 ## Where it fits in a flow
 
@@ -90,6 +93,7 @@ A job (`*.ext`) is a few `key: value` lines:
 design: counter
 def:    counter.def        # routed geometry
 rules:  sky130.rules       # per-layer R/C
+lef:    counter.lef        # optional: routing widths -> edge-to-edge coupling gaps
 corner: typical
 temp:   25
 ```
@@ -160,12 +164,12 @@ a commercial node comes with that node's plugin.
 
 **v1** is a **rule-based** extractor with **lateral coupling capacitance** from
 segment adjacency: grounded R/C per net plus per-net-pair coupling caps, emitted
-in SPEF (totals include coupling on both nets). Runs fully offline, no external
-deps, 16 tests green. Enough to feed STA/SI and to validate the whole
-`def → spef → timing` seam end to end.
+in SPEF (totals include coupling on both nets). Coupling uses the **edge-to-edge
+gap** when a tech LEF supplies routing widths (centerline otherwise). Runs fully
+offline, no external deps, 19 tests green. Enough to feed STA/SI and to validate
+the whole `def → spef → timing` seam end to end.
 
 The road to sign-off grade (M5) builds on the same file formats and CLI:
-edge-to-edge gap from LEF wire widths (v1 uses centerlines), inter-layer
-(crossover) coupling, the pi-model / per-pin RC tree, and a **field-solved
-2.5-D kernel** that replaces the rule model and is **fit against golden
-patterns** — the actual M5 correlation. Same `run` command, no license.
+inter-layer (crossover) coupling, the pi-model / per-pin RC tree, and a
+**field-solved 2.5-D kernel** that replaces the rule model and is **fit against
+golden patterns** — the actual M5 correlation. Same `run` command, no license.

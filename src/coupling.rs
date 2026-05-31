@@ -10,10 +10,11 @@
 //! ```
 //!
 //! ignored beyond `couple_cutoff`. `coupling_per_um` is the per-micron coupling
-//! at the reference spacing `s_ref`, falling off ~1/gap. Centerline coordinates
-//! give the gap here; true edge-to-edge gap (needs LEF wire widths) and a
-//! field-solved 2.5-D kernel are the M5 upgrades that replace this model behind
-//! the same SPEF output.
+//! at the reference spacing `s_ref`, falling off ~1/gap. The `gap` is the true
+//! **edge-to-edge** spacing when LEF routing widths are supplied
+//! (`gap = centerline_distance - (w_a + w_b)/2`); with no widths it degrades to
+//! the centerline distance. A field-solved 2.5-D kernel + golden-pattern fit is
+//! the remaining M5 upgrade, replacing this model behind the same SPEF output.
 //!
 //! Pure std — fully unit-tested offline.
 
@@ -49,7 +50,16 @@ fn overlap_gap(a: &Segment, b: &Segment) -> Option<(f64, f64)> {
 }
 
 /// Coupling caps between every pair of nets — one aggregated entry per net pair.
-pub fn extract_coupling(nets: &[DefNet], rules: &RcRules) -> Vec<CouplingCap> {
+///
+/// `widths` maps layer → default routing width (um, from LEF). When present the
+/// gap is edge-to-edge; when a layer is absent (width 0) it degrades to the
+/// centerline distance — so an empty map reproduces the pre-LEF behaviour.
+pub fn extract_coupling(
+    nets: &[DefNet],
+    rules: &RcRules,
+    widths: &BTreeMap<String, f64>,
+) -> Vec<CouplingCap> {
+    let width = |layer: &str| widths.get(layer).copied().unwrap_or(0.0);
     let mut acc: BTreeMap<(String, String), f64> = BTreeMap::new();
     for i in 0..nets.len() {
         for j in (i + 1)..nets.len() {
@@ -57,12 +67,14 @@ pub fn extract_coupling(nets: &[DefNet], rules: &RcRules) -> Vec<CouplingCap> {
             let mut cc = 0.0;
             for sa in &na.segments {
                 for sb in &nb.segments {
-                    let Some((ov, gap)) = overlap_gap(sa, sb) else { continue };
-                    if gap <= 0.0 || gap > rules.couple_cutoff {
-                        continue;
-                    }
+                    let Some((ov, center_gap)) = overlap_gap(sa, sb) else { continue };
                     let Some(l) = rules.layer(&sa.layer) else { continue };
                     if l.coupling_per_um <= 0.0 {
+                        continue;
+                    }
+                    // edge-to-edge gap; both segments are on the same layer
+                    let gap = center_gap - width(&sa.layer);
+                    if gap > rules.couple_cutoff {
                         continue;
                     }
                     cc += l.coupling_per_um * ov * (l.s_ref / gap.max(l.s_ref));

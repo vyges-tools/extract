@@ -22,6 +22,7 @@ pub struct ExtractJob {
     pub design: String,
     pub def: String,
     pub rules: String,
+    pub lef: Option<String>, // optional: per-layer routing widths for edge-gap coupling
     pub corner: String,
     pub temp: f64,
     pub base_dir: String,
@@ -64,6 +65,7 @@ impl ExtractJob {
             design: get("design")?,
             def: get("def")?,
             rules: get("rules")?,
+            lef: kv.get("lef").filter(|s| !s.is_empty()).cloned(),
             corner: kv.get("corner").cloned().unwrap_or_else(|| "typical".into()),
             temp: kv.get("temp").and_then(|t| t.parse().ok()).unwrap_or(25.0),
             base_dir: base_dir.to_string(),
