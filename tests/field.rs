@@ -40,3 +40,16 @@ fn fringe_falls_faster_than_plate_at_wide_spacing() {
     // H<=0 falls back to the plate form
     assert!((coupling_per_um_fringe(4.0, 0.35, 0.0, 1.0) - coupling_per_um(4.0, 0.35, 1.0)).abs() < 1e-12);
 }
+
+// shield_k is applied in the engine (ground cap -= k·Cc_net); a focused rules-parse
+// check lives here, the end-to-end effect is the OpenRCX correlation.
+#[test]
+fn shield_k_parses() {
+    use vyges_extract::rules::RcRules;
+    let r = RcRules::parse("eps_r 2.3\nshield_k 0.5\nmet1 0.9 0.08\n").unwrap();
+    assert!((r.shield_k - 0.5).abs() < 1e-12);
+    assert!((r.eps_r - 2.3).abs() < 1e-12);
+    // default off
+    let r0 = RcRules::parse("met1 0.9 0.08\n").unwrap();
+    assert_eq!(r0.shield_k, 0.0);
+}

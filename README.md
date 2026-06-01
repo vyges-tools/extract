@@ -198,17 +198,21 @@ over-states coupling. A **fringe-corrected** coupling is available too: with per
 `exp(-4S/(S+8.01·H))` (coupling falls faster than `1/S` once spacing passes the metal
 height, and taller metals couple more) instead of the bare plate.
 
-**A correlation finding that redirects M5.** Switching coupling from bare plate to
-fringe-corrected did **not** tighten the per-net spread on the counter — because that
-residual is **grounded-cap-limited, not coupling-limited**: the model puts the full
-two-edge fringe to ground regardless of neighbours, so changing only the coupling
-term can't move a spread the ground cap sets. (Confirmed: a *global* fringe cut
-over-corrects the total and widens the spread — so the fix must be
-**neighbour-conditional ground-cap shielding**, where an edge facing a close
-neighbour sheds its ground fringe *into* the coupling, conserving the field.) The
-next M5 lever is shielding, not more coupling sophistication.
+**Conditional ground-cap shielding** (`shield_k <0..1>`): a net's coupling is field
+that would otherwise be grounded fringe, so the grounded cap is reduced by
+`shield_k · Cc_net` (charge conservation) — making it neighbour-dependent. At
+`shield_k = 0.5` it lets the effective `eps_r` rise from 1.45 toward the physical
+~3.9 (2.3) while conserving charge, at comparable accuracy.
 
-The road to sign-off grade builds on the same file formats and CLI: **conditional
-ground-cap shielding** (the spread lever above), a **geometry-aware, moment-weighted
-RC tree** (v1 apportions uniformly), and accurate per-layer heights toward a
-field-solved / pattern-fit kernel. Same `run` command, no license.
+**What the M5 study established (the honest ceiling).** Three independent levers —
+fringe-corrected coupling, a global fringe cut, and conditional shielding — were each
+measured against the OpenRCX golden, and **none tighten the ±40% per-net spread**. So
+that spread is the **rule-based / analytic ceiling**: the calibrated model nails the
+block total (~2 %) and is portable, but per-net accuracy below ±40 % depends on
+detailed local geometry (exact multi-neighbour configurations, density) that no
+global coefficient captures. Closing it requires **true per-net field solving**
+against the actual layout — the research-grade endpoint commercial QRC/StarRC occupy.
+
+The road to sign-off grade is therefore a genuine **2.5-D field/pattern-matched
+solver** per net (not more global coefficients), plus a geometry-aware
+moment-weighted RC tree. Same file formats and CLI; same `run` command, no license.

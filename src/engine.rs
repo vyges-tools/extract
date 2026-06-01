@@ -51,7 +51,7 @@ pub fn extract(job: &ExtractJob) -> Result<Extraction, ExtractError> {
     let d: Def = def::load(&job.resolve(&job.def)).map_err(|e| ExtractError::Parse(e.to_string()))?;
     let r: RcRules =
         RcRules::load(&job.resolve(&job.rules)).map_err(|e| ExtractError::Parse(e.to_string()))?;
-    let nets = d
+    let mut nets = d
         .nets
         .iter()
         .map(|n| rc::extract_net(n, &r).map_err(|e| ExtractError::Parse(e.to_string())))
@@ -62,6 +62,21 @@ pub fn extract(job: &ExtractJob) -> Result<Extraction, ExtractError> {
         None => Lef::default(),
     };
     let couplings = coupling::extract_coupling(&d.nets, &r, &lef.widths, &lef.thicknesses);
+    // Conditional ground-cap shielding: a net's coupling is field that would otherwise
+    // be grounded fringe, so reduce its grounded cap by `shield_k · Cc_net` (charge
+    // conservation) — making the ground cap neighbour-dependent, the spread lever.
+    if r.shield_k > 0.0 {
+        let mut cc_net: std::collections::BTreeMap<&str, f64> = std::collections::BTreeMap::new();
+        for c in &couplings {
+            *cc_net.entry(c.a.as_str()).or_default() += c.cap_ff;
+            *cc_net.entry(c.b.as_str()).or_default() += c.cap_ff;
+        }
+        for net in &mut nets {
+            if let Some(&cc) = cc_net.get(net.name.as_str()) {
+                net.cap_ff = (net.cap_ff - r.shield_k * cc).max(0.0);
+            }
+        }
+    }
     Ok(Extraction { nets, couplings })
 }
 
