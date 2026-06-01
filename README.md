@@ -27,6 +27,13 @@ never writing an extractor — it is *correlating* one to silicon. `vyges-extrac
 starts in that open tier, behind clean file formats, and is built to be
 correlated upward without changing how anyone calls it.
 
+**Describe the job, not the script.** Extraction and the tools around it are
+typically driven by hand-written **Tcl** control scripts — a recurring source of
+silent typos, copy-paste drift, and brittle maintenance. `vyges-extract` takes a
+small **declarative job file** (`.ext`: design, DEF, rules, LEF) instead: readable,
+diffable, schema-checkable, with no control flow to get wrong. This is a
+toolchain-wide property — char, sta-si, and em-ir are configured the same way.
+
 ## The problem it solves
 
 Given:
