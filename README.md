@@ -34,6 +34,13 @@ small **declarative job file** (`.ext`: design, DEF, rules, LEF) instead: readab
 diffable, schema-checkable, with no control flow to get wrong. This is a
 toolchain-wide property — char, sta-si, and em-ir are configured the same way.
 
+**Validate fast, sign off with your tool.** `vyges-extract` emits **standard SPEF**, so
+it drops into any STA / sign-off tool unchanged. Iterate with vyges-extract in the fast
+loop, and hand the same design to StarRC or Quantus for final sign-off parasitics if you
+prefer — nothing locks you in. It sits *alongside* your flow (correlated to OpenRCX
+within ~2% on a real block), the fast checker for the inner loop rather than a
+replacement for your golden extractor.
+
 ## The problem it solves
 
 Given:
