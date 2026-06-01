@@ -34,6 +34,9 @@ pub struct RcRules {
     /// and a metal thickness is known, coupling is `eps_r·eps0·T/gap` (the geometry-
     /// derived M5 model) instead of the per-layer `coupling` coefficient.
     pub eps_r: f64,
+    /// Per-layer metal height above the ground plane (um), for the fringe-corrected
+    /// field kernel (`height <layer> <um>`). Empty -> bare parallel-plate coupling.
+    pub heights: BTreeMap<String, f64>,
     /// Areal coupling (fF/um^2) between a pair of (different) layers whose
     /// footprints overlap — keyed by the layer names sorted ascending.
     pub interlayer: BTreeMap<(String, String), f64>,
@@ -80,6 +83,7 @@ impl RcRules {
         let mut via_res = 0.0;
         let mut couple_cutoff = DEFAULT_COUPLE_CUTOFF;
         let mut eps_r = 0.0;
+        let mut heights = BTreeMap::new();
         let mut interlayer = BTreeMap::new();
         for raw in text.lines() {
             let toks: Vec<&str> = strip_comment(raw).split_whitespace().collect();
@@ -105,6 +109,14 @@ impl RcRules {
             }
             if toks[0].eq_ignore_ascii_case("eps_r") {
                 eps_r = num(toks.get(1).copied().unwrap_or(""), "eps_r")?;
+                continue;
+            }
+            if toks[0].eq_ignore_ascii_case("height") {
+                let layer = toks.get(1).copied().unwrap_or("");
+                if layer.is_empty() {
+                    return Err(RulesError("height needs `layer <um>`".into()));
+                }
+                heights.insert(layer.to_string(), num(toks.get(2).copied().unwrap_or(""), "height")?);
                 continue;
             }
             if toks[0].eq_ignore_ascii_case("interlayer") {
@@ -140,7 +152,7 @@ impl RcRules {
         if layers.is_empty() {
             return Err(RulesError("no layers defined".into()));
         }
-        Ok(RcRules { layers, via_res, couple_cutoff, eps_r, interlayer })
+        Ok(RcRules { layers, via_res, couple_cutoff, eps_r, heights, interlayer })
     }
 
     pub fn load(path: &str) -> Result<RcRules, RulesError> {

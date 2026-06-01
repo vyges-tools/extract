@@ -86,8 +86,11 @@ pub fn extract_coupling(
                         }
                         let t = thickness(&sa.layer);
                         if rules.eps_r > 0.0 && t > 0.0 {
-                            // M5 field kernel: sidewall parallel-plate from real T + gap.
-                            cc += crate::field::coupling_per_um(rules.eps_r, t, gap) * ov;
+                            // M5 field kernel: sidewall parallel-plate from real T + gap,
+                            // fringe-corrected by the ground-competition fall-off when the
+                            // layer height is known (else bare plate).
+                            let h = rules.heights.get(&sa.layer).copied().unwrap_or(0.0);
+                            cc += crate::field::coupling_per_um_fringe(rules.eps_r, t, h, gap) * ov;
                         } else if l.coupling_per_um > 0.0 {
                             // rule-based coefficient (falls back when no eps_r / thickness)
                             cc += l.coupling_per_um * ov * (l.s_ref / gap.max(l.s_ref));

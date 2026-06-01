@@ -25,3 +25,18 @@ fn gap_floored_at_near_field() {
     assert!((abut - floor).abs() < 1e-12);
     assert!(abut.is_finite());
 }
+
+#[test]
+fn fringe_falls_faster_than_plate_at_wide_spacing() {
+    use vyges_extract::field::{coupling_per_um, coupling_per_um_fringe};
+    // at wide spacing the ground-competition fall-off makes fringe < bare plate
+    let plate = coupling_per_um(4.0, 0.35, 2.0);
+    let fringe = coupling_per_um_fringe(4.0, 0.35, 1.0, 2.0);
+    assert!(fringe < plate, "fringe-corrected falls below plate at S>>H: {fringe} vs {plate}");
+    // taller layer (more H) competes less with ground -> couples more at the same S
+    let lowH = coupling_per_um_fringe(4.0, 0.35, 0.5, 1.0);
+    let hiH = coupling_per_um_fringe(4.0, 0.35, 3.0, 1.0);
+    assert!(hiH > lowH, "higher metal couples more (less ground shorting)");
+    // H<=0 falls back to the plate form
+    assert!((coupling_per_um_fringe(4.0, 0.35, 0.0, 1.0) - coupling_per_um(4.0, 0.35, 1.0)).abs() < 1e-12);
+}

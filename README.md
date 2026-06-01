@@ -193,11 +193,22 @@ Calibrated against the OpenRCX golden it lands the counter total at 0.99× with 
 comparable per-net spread (±~40%) — i.e. it recovers the hand-calibrated accuracy
 from first principles with one knob and correct physics, so it generalises. The
 effective `eps_r` (~1.45, below the physical ~3.9) shows the bare parallel-plate
-over-states coupling; the **fringe-corrected (Sakurai-style) form** — which also
-needs layer height — is the next M5 step to push `eps_r` physical and tighten the
-spread, en route to the field-solved / pattern-fit kernel.
+over-states coupling. A **fringe-corrected** coupling is available too: with per-layer
+`height <um>` rules the kernel applies the Sakurai-style ground-competition fall-off
+`exp(-4S/(S+8.01·H))` (coupling falls faster than `1/S` once spacing passes the metal
+height, and taller metals couple more) instead of the bare plate.
 
-The road to sign-off grade builds on the same file formats and CLI: the
-fringe-corrected coupling above, a **geometry-aware, moment-weighted RC tree** (v1
-apportions uniformly), and ground-cap **shielding** (the field redistributes between
-ground and neighbour). Same `run` command, no license.
+**A correlation finding that redirects M5.** Switching coupling from bare plate to
+fringe-corrected did **not** tighten the per-net spread on the counter — because that
+residual is **grounded-cap-limited, not coupling-limited**: the model puts the full
+two-edge fringe to ground regardless of neighbours, so changing only the coupling
+term can't move a spread the ground cap sets. (Confirmed: a *global* fringe cut
+over-corrects the total and widens the spread — so the fix must be
+**neighbour-conditional ground-cap shielding**, where an edge facing a close
+neighbour sheds its ground fringe *into* the coupling, conserving the field.) The
+next M5 lever is shielding, not more coupling sophistication.
+
+The road to sign-off grade builds on the same file formats and CLI: **conditional
+ground-cap shielding** (the spread lever above), a **geometry-aware, moment-weighted
+RC tree** (v1 apportions uniformly), and accurate per-layer heights toward a
+field-solved / pattern-fit kernel. Same `run` command, no license.

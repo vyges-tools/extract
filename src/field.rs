@@ -31,7 +31,24 @@ pub const EPS0_FF_PER_UM: f64 = 8.854e-3;
 pub const GAP_MIN_UM: f64 = 0.2;
 
 /// Lateral coupling capacitance per micron of parallel run (fF/um) between two
-/// same-layer wires at edge-to-edge `gap_um`, for metal of `thickness_um`.
+/// same-layer wires at edge-to-edge `gap_um`, for metal of `thickness_um` —
+/// bare sidewall parallel-plate (no fringe/ground correction).
 pub fn coupling_per_um(eps_r: f64, thickness_um: f64, gap_um: f64) -> f64 {
     eps_r * EPS0_FF_PER_UM * thickness_um / gap_um.max(GAP_MIN_UM)
+}
+
+/// Fringe-corrected coupling (Sakurai-Tamaru style): the sidewall parallel-plate
+/// scaled by the **ground-competition fall-off** `exp(-4S/(S + 8.01·H))`, where `H`
+/// is the metal's height above the ground plane. As `S → 0` it reduces to the plate
+/// term (×1.41 Sakurai constant); as `S` grows past `H` the field is increasingly
+/// shorted to ground, so coupling falls faster than `1/S` — the physical effect the
+/// bare plate misses, and the layer-dependent term (via `H`) that tightens the
+/// per-net spread. Falls back to the plate form when `H <= 0`.
+pub fn coupling_per_um_fringe(eps_r: f64, thickness_um: f64, height_um: f64, gap_um: f64) -> f64 {
+    if height_um <= 0.0 {
+        return coupling_per_um(eps_r, thickness_um, gap_um);
+    }
+    let s = gap_um.max(GAP_MIN_UM);
+    let falloff = (-4.0 * s / (s + 8.01 * height_um)).exp();
+    eps_r * EPS0_FF_PER_UM * 1.41 * (thickness_um / s) * falloff
 }
