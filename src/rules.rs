@@ -30,6 +30,10 @@ pub struct RcRules {
     pub layers: BTreeMap<String, LayerRc>,
     pub via_res: f64,        // default ohm per via cut
     pub couple_cutoff: f64,  // um — ignore lateral coupling beyond this gap
+    /// Effective permittivity for the field-kernel coupling (`eps_r <v>`). When > 0
+    /// and a metal thickness is known, coupling is `eps_r·eps0·T/gap` (the geometry-
+    /// derived M5 model) instead of the per-layer `coupling` coefficient.
+    pub eps_r: f64,
     /// Areal coupling (fF/um^2) between a pair of (different) layers whose
     /// footprints overlap — keyed by the layer names sorted ascending.
     pub interlayer: BTreeMap<(String, String), f64>,
@@ -75,6 +79,7 @@ impl RcRules {
         let mut layers = BTreeMap::new();
         let mut via_res = 0.0;
         let mut couple_cutoff = DEFAULT_COUPLE_CUTOFF;
+        let mut eps_r = 0.0;
         let mut interlayer = BTreeMap::new();
         for raw in text.lines() {
             let toks: Vec<&str> = strip_comment(raw).split_whitespace().collect();
@@ -96,6 +101,10 @@ impl RcRules {
             }
             if toks[0].eq_ignore_ascii_case("couple_cutoff") {
                 couple_cutoff = num(toks.get(1).copied().unwrap_or(""), "couple_cutoff")?;
+                continue;
+            }
+            if toks[0].eq_ignore_ascii_case("eps_r") {
+                eps_r = num(toks.get(1).copied().unwrap_or(""), "eps_r")?;
                 continue;
             }
             if toks[0].eq_ignore_ascii_case("interlayer") {
@@ -131,7 +140,7 @@ impl RcRules {
         if layers.is_empty() {
             return Err(RulesError("no layers defined".into()));
         }
-        Ok(RcRules { layers, via_res, couple_cutoff, interlayer })
+        Ok(RcRules { layers, via_res, couple_cutoff, eps_r, interlayer })
     }
 
     pub fn load(path: &str) -> Result<RcRules, RulesError> {

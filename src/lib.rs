@@ -18,6 +18,7 @@ pub mod job;
 pub mod rules;
 pub mod def;
 pub mod lef;
+pub mod field;
 pub mod rc;
 pub mod coupling;
 pub mod spef;

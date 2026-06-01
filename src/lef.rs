@@ -10,7 +10,8 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Default)]
 pub struct Lef {
-    pub widths: BTreeMap<String, f64>, // layer -> default routing width (um)
+    pub widths: BTreeMap<String, f64>,     // layer -> default routing width (um)
+    pub thicknesses: BTreeMap<String, f64>, // layer -> metal thickness (um), for the field kernel
 }
 
 #[derive(Debug)]
@@ -25,8 +26,10 @@ impl std::error::Error for LefError {}
 impl Lef {
     pub fn parse(text: &str) -> Lef {
         let mut widths = BTreeMap::new();
+        let mut thicknesses = BTreeMap::new();
         let mut cur: Option<String> = None; // layer currently open
         let mut width: Option<f64> = None;
+        let mut thick: Option<f64> = None;
         for raw in text.lines() {
             let line = match raw.find('#') {
                 Some(i) => &raw[..i],
@@ -37,19 +40,28 @@ impl Lef {
                 ["LAYER", name, ..] => {
                     cur = Some(name.to_string());
                     width = None;
+                    thick = None;
                 }
                 ["WIDTH", w, ..] => {
                     width = w.trim_end_matches(';').parse::<f64>().ok();
                 }
+                ["THICKNESS", t, ..] => {
+                    thick = t.trim_end_matches(';').parse::<f64>().ok();
+                }
                 ["END", name, ..] if cur.as_deref() == Some(*name) => {
-                    if let (Some(l), Some(w)) = (cur.take(), width.take()) {
-                        widths.insert(l, w);
+                    if let Some(l) = cur.take() {
+                        if let Some(w) = width.take() {
+                            widths.insert(l.clone(), w);
+                        }
+                        if let Some(t) = thick.take() {
+                            thicknesses.insert(l, t);
+                        }
                     }
                 }
                 _ => {}
             }
         }
-        Lef { widths }
+        Lef { widths, thicknesses }
     }
 
     pub fn load(path: &str) -> Result<Lef, LefError> {

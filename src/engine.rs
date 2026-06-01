@@ -6,7 +6,6 @@
 //! fit against golden patterns, that step shells out to the EDA environment,
 //! mirroring how `vyges-char` degrades when `ngspice` is absent.
 
-use std::collections::BTreeMap;
 
 use crate::coupling::{self, CouplingCap};
 use crate::def::{self, Def};
@@ -57,12 +56,12 @@ pub fn extract(job: &ExtractJob) -> Result<Extraction, ExtractError> {
         .iter()
         .map(|n| rc::extract_net(n, &r).map_err(|e| ExtractError::Parse(e.to_string())))
         .collect::<Result<Vec<_>, _>>()?;
-    // LEF routing widths (optional) -> edge-to-edge coupling gaps
-    let widths: BTreeMap<String, f64> = match &job.lef {
-        Some(p) => Lef::load(&job.resolve(p)).map_err(|e| ExtractError::Parse(e.to_string()))?.widths,
-        None => BTreeMap::new(),
+    // LEF (optional) -> routing widths (edge-to-edge gaps) + thicknesses (field kernel)
+    let lef = match &job.lef {
+        Some(p) => Lef::load(&job.resolve(p)).map_err(|e| ExtractError::Parse(e.to_string()))?,
+        None => Lef::default(),
     };
-    let couplings = coupling::extract_coupling(&d.nets, &r, &widths);
+    let couplings = coupling::extract_coupling(&d.nets, &r, &lef.widths, &lef.thicknesses);
     Ok(Extraction { nets, couplings })
 }
 

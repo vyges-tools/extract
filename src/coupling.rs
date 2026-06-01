@@ -65,8 +65,10 @@ pub fn extract_coupling(
     nets: &[DefNet],
     rules: &RcRules,
     widths: &BTreeMap<String, f64>,
+    thicknesses: &BTreeMap<String, f64>,
 ) -> Vec<CouplingCap> {
     let width = |layer: &str| widths.get(layer).copied().unwrap_or(0.0);
+    let thickness = |layer: &str| thicknesses.get(layer).copied().unwrap_or(0.0);
     let mut acc: BTreeMap<(String, String), f64> = BTreeMap::new();
     for i in 0..nets.len() {
         for j in (i + 1)..nets.len() {
@@ -78,14 +80,18 @@ pub fn extract_coupling(
                         // lateral coupling: parallel same-layer runs, edge-to-edge gap
                         let Some((ov, center_gap)) = overlap_gap(sa, sb) else { continue };
                         let Some(l) = rules.layer(&sa.layer) else { continue };
-                        if l.coupling_per_um <= 0.0 {
-                            continue;
-                        }
                         let gap = center_gap - width(&sa.layer);
                         if gap > rules.couple_cutoff {
                             continue;
                         }
-                        cc += l.coupling_per_um * ov * (l.s_ref / gap.max(l.s_ref));
+                        let t = thickness(&sa.layer);
+                        if rules.eps_r > 0.0 && t > 0.0 {
+                            // M5 field kernel: sidewall parallel-plate from real T + gap.
+                            cc += crate::field::coupling_per_um(rules.eps_r, t, gap) * ov;
+                        } else if l.coupling_per_um > 0.0 {
+                            // rule-based coefficient (falls back when no eps_r / thickness)
+                            cc += l.coupling_per_um * ov * (l.s_ref / gap.max(l.s_ref));
+                        }
                     } else if let Some(coeff) = rules.interlayer(&sa.layer, &sb.layer) {
                         // inter-layer (crossover) coupling: areal cap over the
                         // footprint overlap (needs widths -> zero without a LEF).

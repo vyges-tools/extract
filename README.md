@@ -184,8 +184,20 @@ ceiling (real neighbor distances/density a per-µm coefficient can't resolve) �
 is exactly what the M5 field solve closes. See the strategy repo's
 `extract-openrcx-correlation.md`.
 
-The road to sign-off grade (M5) builds on the same file formats and CLI: a
-**geometry-aware, moment-weighted tree** (v1 apportions uniformly, with no
-per-pin distances yet), and a **field-solved 2.5-D kernel** that replaces the
-rule model and is **fit against golden patterns** — the actual M5 correlation.
-Same `run` command, no license.
+**M5 field kernel (v1).** An `eps_r <value>` rule turns on a geometry-derived
+**2.5-D coupling kernel** — sidewall parallel-plate `Cc = eps_r·eps0·T/gap` from the
+LEF metal **thickness** and the real edge-to-edge **gap** — replacing the six
+hand-tuned per-layer coupling coefficients with one physical parameter (and fixing
+their inverted layer trend: a taller sidewall now correctly couples *more*).
+Calibrated against the OpenRCX golden it lands the counter total at 0.99× with a
+comparable per-net spread (±~40%) — i.e. it recovers the hand-calibrated accuracy
+from first principles with one knob and correct physics, so it generalises. The
+effective `eps_r` (~1.45, below the physical ~3.9) shows the bare parallel-plate
+over-states coupling; the **fringe-corrected (Sakurai-style) form** — which also
+needs layer height — is the next M5 step to push `eps_r` physical and tighten the
+spread, en route to the field-solved / pattern-fit kernel.
+
+The road to sign-off grade builds on the same file formats and CLI: the
+fringe-corrected coupling above, a **geometry-aware, moment-weighted RC tree** (v1
+apportions uniformly), and ground-cap **shielding** (the field redistributes between
+ground and neighbour). Same `run` command, no license.
