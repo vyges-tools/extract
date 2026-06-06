@@ -89,7 +89,7 @@ between the router and the timing/SI step.
 ## Use it
 
 ```sh
-# prebuilt binaries: dist/<triple>/vyges-extract  (or build it yourself:)
+# build it yourself (std-only, no deps) -- or grab a binary from GitHub Releases:
 cargo build --release            # std-only, no external deps
 
 # 1. write a per-layer rules deck (see examples/counter/sky130.rules)
