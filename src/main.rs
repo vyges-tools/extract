@@ -116,6 +116,7 @@ fn main() {
 
     if cli.version {
         println!("vyges-extract {}", vyges_extract::VERSION);
+        println!("{}", vyges_extract::COPYRIGHT);
         return;
     }
     let cmd = cli.positionals.first().cloned().unwrap_or_default();
