@@ -2,7 +2,11 @@
 name = "vyges-extract"
 version = "0.0.1"
 edition = "2021"
-description = "Vyges tools"
+description = "Interconnect RC parasitic extraction: routed layout in, SPEF out."
+license = "Apache-2.0"
+authors = ["Vyges <https://vyges.com/contact>"]
+homepage = "https://vyges.com"
+repository = "https://github.com/vyges-tools/extract"
 
 # std-only (no external dependencies) so the core builds/tests offline.
 
