@@ -1,0 +1,25 @@
+# sky130A — open reference extraction deck for vyges-extract
+#
+# Per-layer RC for the sky130A metal stack. The **capacitance** coefficients are
+# CALIBRATED: the per-layer cap/coupling were fit so vyges-extract's per-net total
+# capacitance matches the foundry-reference extractor (OpenROAD **OpenRCX**, nom
+# corner, rules.openrcx.sky130A.nom) on a routed block — see
+# correlation/openrcx-counter.md. On that block the calibrated total tracks OpenRCX
+# to **0.997** (per-net mean 1.02, median 0.98, σ 0.13), vs ~0.60 for an
+# uncalibrated illustrative deck.
+#
+# Honest bounds: calibrated to OpenRCX (a reference extractor), not yet to silicon;
+# fit on one representative block (a production / certified per-fab deck calibrates
+# on a SET, which also breaks per-layer collinearity — e.g. li1 vs met1 — and a
+# silicon-correlated deck is the NDA plugin, never in-repo). RESISTANCE per-µm is
+# the illustrative value, not yet calibrated (an R pass is separate). The per-µm
+# model lumps width/spacing dependence that OpenRCX tables resolve — the residual
+# ±13% spread is that model gap (a width/spacing-aware deck is the next depth step).
+#
+# layer  res(ohm/um)  cap(fF/um)  coupling(fF/um)  s_ref(um)
+li1      12.8         0.060        0.030            0.17
+met1      0.125       0.1259       0.0807           0.14
+met2      0.125       0.1211       0.0740           0.14
+met3      0.047       0.1371       0.0806           0.30
+via       9.3
+couple_cutoff 2.0     # um — ignore lateral coupling beyond this gap
