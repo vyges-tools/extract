@@ -1,3 +1,4 @@
 /target
 *.spef
 dist/
+.cargo/config.toml

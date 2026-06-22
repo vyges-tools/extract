@@ -1,6 +1,6 @@
 [package]
 name = "vyges-extract"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 description = "Interconnect RC parasitic extraction: routed layout in, SPEF out."
 license = "Apache-2.0"
@@ -11,7 +11,7 @@ repository = "https://github.com/vyges-tools/extract"
 # No third-party deps (builds/tests offline). Shared readers come from the
 # vyges-loom foundation — sibling-checkout path dep in dev; release pins git/version.
 [dependencies]
-vyges-loom = { path = "../vyges-tools-loom" }
+vyges-loom = { git = "https://github.com/vyges-tools/loom", tag = "v0.1.0" }
 
 [[bin]]
 name = "vyges-extract"
