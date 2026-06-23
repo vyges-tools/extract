@@ -1,0 +1,12 @@
+# Illustrative per-layer RC for a sky130-class metal stack (NOT sign-off values).
+# Same deck shape as examples/counter/sky130.rules — the RC model is geometry x
+# rules, so an analog block extracts on exactly the same contract as a digital one.
+# layer  res(ohm/um)  cap(fF/um)  coupling(fF/um)  s_ref(um)
+met1      0.125        0.078       0.050            0.14
+met2      0.125        0.072       0.044            0.14
+met3      0.047        0.068       0.040            0.30
+via       9.3
+couple_cutoff 2.0     # um — ignore lateral coupling between wires farther apart than this
+# inter-layer (crossover) areal coupling, fF/um^2 (needs LEF widths):
+interlayer met1 met2  0.035
+interlayer met2 met3  0.032

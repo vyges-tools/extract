@@ -1,0 +1,6 @@
+design:   bias_gen
+def:      bias_gen.def        # routed analog layout (geometry source)
+rules:    analog.rules        # per-layer RC coefficients
+lef:      bias_gen.lef        # per-layer routing widths -> edge-to-edge coupling gaps
+corner:   typical
+temp:     25

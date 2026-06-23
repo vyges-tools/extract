@@ -186,6 +186,49 @@ the engine is open. Use `vyges-extract` today on open PDKs and as an
 estimation/verification adjunct on any PDK you have; certified sign-off output on
 a commercial node comes with that node's plugin.
 
+## Domain coverage — digital *and* analog / mixed-signal
+
+The RC model is **geometry × rules** (`rc.rs`, `coupling.rs`): per-net wirelength
+per layer × ohm/µm and fF/µm, plus adjacency coupling. Nothing in that math is
+std-cell-, clock-, or Liberty-specific — there is **no Liberty dependency** — so it
+is **domain-agnostic**. What couples extraction to a domain is only the *input
+format*: it consumes routed signal nets as DEF `NETS` (per-segment layer + Manhattan
+endpoints + pins) via the shared `vyges_loom` DEF reader. Any routed layout in that
+form extracts identically.
+
+- **Analog routed layouts supplied as DEF extract today, unchanged.**
+  [`examples/bias_gen/`](examples/bias_gen/) is a small analog bias generator with a
+  long thin **bias line** (met1, resistance matters), a **high-impedance sensitive
+  node** carried up the stack (met1→via→met2), and a **wide supply tap** (met3) —
+  exercising multiple layers and vias. `tests/analog.rs` runs extraction and asserts
+  sane RC: R and C > 0 per net, R scales with wirelength, the via adds its rule
+  resistance, and the sensitive node's coupling to the bias line is captured (while
+  the supply tap, beyond `couple_cutoff`, is correctly left uncoupled).
+
+  ```sh
+  vyges-extract run  examples/bias_gen/bias_gen.ext           # -> SPEF
+  vyges-extract run  examples/bias_gen/bias_gen.ext --json    # -> per-net R/C
+  ```
+
+- **GDS-only analog** (no routed DEF) has two on-ramps. The simplest is to **emit a
+  routed DEF** from your router and use the validated DEF path above. For raw GDS,
+  an optional **`gds → DefNet` connectivity-tracing front-end** ([`src/gds.rs`](src/gds.rs))
+  traces connected wire geometry into the same `DefNet` view the RC core consumes:
+  it flattens the GDS, classifies rectangles by a small layer map
+  (`GDS layer/datatype → routing name | via`), unions touching same-layer wires
+  (cross-layer joins are **contact-gated** — only where a via rect overlaps both),
+  reduces each net to centerline segments + a via count, and names nets from TEXT
+  labels. It sits strictly **above** `rc.rs` (it produces `DefNet`s; the RC math is
+  untouched) and is exercised by `tests/gds_extract.rs` (GDS → trace → RC →
+  coupling). Its honest bounds: axis-aligned rectangles (polygon bends bbox'd),
+  via = overlap (no enclosure DRC), and no instance/pin hookup (GDS carries none, so
+  the SPEF uses the lumped form) — see the module header for the full list. For a
+  digital block the routed-DEF path is and remains the primary input.
+
+Scope here is **physical RC extraction**. Per-net field-solve accuracy (the ±40 %
+analytic ceiling below) and analog *functional/timing* sign-off remain external/
+research-grade work.
+
 ## Current state (2026-05-31)
 
 **v1** is a **rule-based** extractor with **lateral coupling capacitance** from

@@ -20,6 +20,10 @@ pub mod rules;
 // Def is a superset (signal nets in µm for extraction + power/components for PDN);
 // the signal `nets`/`DefNet`/`Segment` shapes extraction uses are unchanged.
 pub use vyges_loom::{def, lef};
+// Optional `gds -> DefNet` connectivity-tracing front-end: a GDS-only analog flow
+// (no routed DEF). Sits ABOVE rc.rs — it produces `DefNet`s the unchanged RC core
+// consumes. Uses the shared vyges-layout GDS kernel.
+pub mod gds;
 pub mod field;
 pub mod rc;
 pub mod coupling;

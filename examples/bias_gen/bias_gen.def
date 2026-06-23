@@ -1,0 +1,27 @@
+VERSION 5.8 ;
+DESIGN bias_gen ;
+UNITS DISTANCE MICRONS 1000 ;
+
+# A small analog bias-generator block. Three routed nets exercise the cases an
+# analog layout cares about (and a digital std-cell block rarely shows so cleanly):
+#
+#   vbias    — a long, thin bias distribution line (met1): resistance matters, runs
+#              parallel to a sensitive node so it couples to it.
+#   vsense   — a high-impedance sensitive node carried up the stack (met1 -> via ->
+#              met2): low cap is the whole point, and it must not pick up noise from
+#              the bias line running alongside it.
+#   vsupply  — a wide local supply tap (met3): low R by design, big grounded cap.
+#
+# Geometry is in DEF DB units (1000/um). Coordinates chosen so the RC is hand-checkable.
+
+NETS 3 ;
+- vbias ( mirror X ) ( cascode G ) ( load G )
+  + ROUTED met1 ( 1000 1000 ) ( 1000 21000 ) ;
+- vsense ( ota OUT ) ( comp INP )
+  + ROUTED met1 ( 2000 1000 ) ( 2000 11000 )
+    NEW met2 ( 2000 11000 ) M1M2_VIA ( 12000 11000 ) ;
+- vsupply ( tap0 VDD ) ( tap1 VDD )
+  + ROUTED met3 ( 1000 25000 ) M2M3_VIA ( 31000 25000 ) ;
+END NETS
+
+END DESIGN
