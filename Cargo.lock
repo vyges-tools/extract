@@ -13,9 +13,9 @@ dependencies = [
 [[package]]
 name = "vyges-layout"
 version = "0.0.1"
-source = "git+https://github.com/vyges-tools/layout?tag=v0.1.0#ed86a8cd5c58865934e2c848c4d5d635ea9e6a24"
+source = "git+https://github.com/vyges-tools/layout?branch=main#43c7d3f275a302418a621f1b732eae8dd34441c0"
 
 [[package]]
 name = "vyges-loom"
 version = "0.0.1"
-source = "git+https://github.com/vyges-tools/loom?tag=v0.1.0#6d2affdc3830b1e7748973a2d675804c453ebac4"
+source = "git+https://github.com/vyges-tools/loom?branch=main#7f4aac6ffbeb6d01bcac7cf4e99d4f0afa28c844"

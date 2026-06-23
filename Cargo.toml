@@ -14,8 +14,8 @@ repository = "https://github.com/vyges-tools/extract"
 # `gds -> DefNet` connectivity-tracing front-end (a GDS-only analog flow); the RC
 # core still consumes `&[DefNet]` only, so this stays above the rc.rs boundary.
 [dependencies]
-vyges-loom = { git = "https://github.com/vyges-tools/loom", tag = "v0.1.0" }
-vyges-layout = { git = "https://github.com/vyges-tools/layout", tag = "v0.1.0" }
+vyges-loom = { git = "https://github.com/vyges-tools/loom", branch = "main" }
+vyges-layout = { git = "https://github.com/vyges-tools/layout", branch = "main" }
 
 [[bin]]
 name = "vyges-extract"
