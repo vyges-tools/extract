@@ -9,7 +9,7 @@ homepage = "https://vyges.com"
 repository = "https://github.com/vyges-tools/extract"
 
 # No third-party deps (builds/tests offline). Shared readers come from the
-# vyges-loom foundation — sibling-checkout path dep in dev; release pins git/version.
+# vyges-loom foundation — an inter-repo dep tracking `branch = "main"`; Cargo.lock pins the commit.
 # vyges-layout supplies the GDS reader + geometry primitives for the optional
 # `gds -> DefNet` connectivity-tracing front-end (a GDS-only analog flow); the RC
 # core still consumes `&[DefNet]` only, so this stays above the rc.rs boundary.
