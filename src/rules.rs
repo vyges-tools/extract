@@ -8,12 +8,16 @@
 //! met1     0.125        0.078       0.050
 //! met2     0.125        0.072       0.044
 //! via      5.0                                  # default per-via resistance (ohm)
+//! rsheet   met1 0.125                           # sheet resistance (ohm/square)
 //! ```
 //!
-//! `res` is sheet resistance reduced to ohm-per-micron at the layer's nominal
-//! routing width; `cap` is grounded capacitance per micron; `coupling` (per
-//! micron) is recorded for the correlated upgrade but not yet folded into the
-//! v0 lumped total. A `via <ohm>` line sets the default per-via resistance.
+//! `res` is resistance per micron at the layer's nominal routing width; `cap` is
+//! grounded capacitance per micron; `coupling` (per micron) is recorded for the
+//! correlated upgrade. A `via <ohm>` line sets the default per-via resistance. An
+//! optional `rsheet <layer> <ohm/square>` line switches that layer to the
+//! **width-dependent** resistance `rsheet · length / width` (width from the LEF),
+//! so a wider wire is correctly less resistive; without it the width-blind `res`
+//! column is used.
 
 use std::collections::BTreeMap;
 
@@ -45,6 +49,11 @@ pub struct RcRules {
     /// Areal coupling (fF/um^2) between a pair of (different) layers whose
     /// footprints overlap — keyed by the layer names sorted ascending.
     pub interlayer: BTreeMap<(String, String), f64>,
+    /// Per-layer **sheet resistance** (ohm/square, `rsheet <layer> <ohm_sq>`). When
+    /// present, wire resistance is the width-dependent `rsheet · length / width`
+    /// (width from the LEF routing width, or a per-segment width if one is known)
+    /// instead of the width-blind `res · length`. Empty -> the `res` column is used.
+    pub rsheet: BTreeMap<String, f64>,
 }
 
 /// Order-independent key for a layer pair.
@@ -91,6 +100,7 @@ impl RcRules {
         let mut shield_k = 0.0;
         let mut heights = BTreeMap::new();
         let mut interlayer = BTreeMap::new();
+        let mut rsheet = BTreeMap::new();
         for raw in text.lines() {
             let toks: Vec<&str> = strip_comment(raw).split_whitespace().collect();
             if toks.is_empty() {
@@ -119,6 +129,14 @@ impl RcRules {
             }
             if toks[0].eq_ignore_ascii_case("shield_k") {
                 shield_k = num(toks.get(1).copied().unwrap_or(""), "shield_k")?;
+                continue;
+            }
+            if toks[0].eq_ignore_ascii_case("rsheet") {
+                let layer = toks.get(1).copied().unwrap_or("");
+                if layer.is_empty() {
+                    return Err(RulesError("rsheet needs `layer <ohm/square>`".into()));
+                }
+                rsheet.insert(layer.to_string(), num(toks.get(2).copied().unwrap_or(""), "rsheet")?);
                 continue;
             }
             if toks[0].eq_ignore_ascii_case("height") {
@@ -162,7 +180,7 @@ impl RcRules {
         if layers.is_empty() {
             return Err(RulesError("no layers defined".into()));
         }
-        Ok(RcRules { layers, via_res, couple_cutoff, eps_r, shield_k, heights, interlayer })
+        Ok(RcRules { layers, via_res, couple_cutoff, eps_r, shield_k, heights, interlayer, rsheet })
     }
 
     pub fn load(path: &str) -> Result<RcRules, RulesError> {
@@ -172,6 +190,19 @@ impl RcRules {
 
     pub fn layer(&self, name: &str) -> Option<&LayerRc> {
         self.layers.get(name)
+    }
+
+    /// Resistance (ohm) of a `len_um`-long wire on `layer` that is `width_um` wide.
+    /// When the layer has a **sheet resistance** and a positive width, this is the
+    /// width-dependent `rsheet · len / width`; otherwise it falls back to the
+    /// width-blind `res · len`. `None` only if the layer has no rule at all (so
+    /// under-extraction stays a hard error, never silent).
+    pub fn wire_res(&self, layer: &str, len_um: f64, width_um: f64) -> Option<f64> {
+        let l = self.layers.get(layer)?;
+        match self.rsheet.get(layer) {
+            Some(&rs) if width_um > 0.0 => Some(rs * len_um / width_um),
+            _ => Some(len_um * l.res_per_um),
+        }
     }
 
     /// Areal coupling (fF/um^2) between two layers, if defined (order-independent).

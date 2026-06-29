@@ -57,8 +57,10 @@ Given:
 it emits an **IEEE-1481 SPEF** (`*.spef`): per net, the connected pins, the
 grounded capacitance, the series resistance, and — the hardest, highest-value
 term — the **lateral coupling capacitance** to neighbouring nets. Grounded R/C
-come from per-layer Manhattan wirelength × the rules; coupling comes from
-**geometric adjacency**: same-layer segments of different nets that run parallel
+come from per-layer Manhattan wirelength × the rules; resistance is
+**width-dependent** when the deck gives a sheet resistance (`R = rsheet × len /
+width`, width from the LEF), otherwise the width-blind `res × len`. Coupling comes
+from **geometric adjacency**: same-layer segments of different nets that run parallel
 and overlap couple by `coupling_per_um × overlap × (s_ref/gap)`, ignored beyond
 `couple_cutoff`. The `gap` is the true **edge-to-edge** spacing when a LEF gives
 the routing widths (`gap = centerline − (w_a+w_b)/2`), or the centerline distance
@@ -124,6 +126,7 @@ A rules deck is a whitespace table:
 # layer  res(ohm/um)  cap(fF/um)  [coupling(fF/um)]  [s_ref(um)]
 met1     0.125        0.078       0.050              0.14
 via      9.3                          # default per-via resistance (ohm)
+rsheet   met1 0.125                   # sheet resistance (ohm/sq) -> width-dependent R = rsheet*len/width
 couple_cutoff 2.0                     # um — ignore lateral coupling beyond this gap
 interlayer met1 met2 0.035            # fF/um^2 areal coupling where layers cross
 ```
@@ -241,9 +244,11 @@ to the calibrated per-net totals, so the distributed model adds topology without
 re-correlating magnitudes; a net with no usable geometry falls back to a lumped star
 (totals include coupling on both nets). Coupling has both a **lateral** term
 (edge-to-edge gap when a tech LEF supplies routing widths, centerline otherwise)
-and an **inter-layer** crossover term (areal, over footprint overlap). Coupling
+and an **inter-layer** crossover term (areal, over footprint overlap). Resistance is
+**width-dependent** when the deck supplies a per-layer sheet resistance (`R = rsheet ×
+len / width`, width from the LEF), else the width-blind `res × len`. Coupling
 extraction is spatially indexed (a uniform grid), so cost scales with routed area
-rather than net-count squared. Runs fully offline, no external deps, 43 tests green.
+rather than net-count squared. Runs fully offline, no external deps, 44 tests green.
 Enough to feed STA/SI and to validate the whole `def → spef → timing` seam end to end.
 
 **Correlated against OpenRCX** on a real routed sky130 block (the M0 counter, 45
@@ -306,9 +311,11 @@ baseline.
 2. **Calibration methodology to silicon.** A principled, documented procedure to correlate
    the rule/field coefficients to *measured silicon* (not just OpenRCX), with uncertainty
    bounds. *Publishable as:* an open calibration flow + dataset for sky130/gf180.
-3. **Width- and geometry-dependent resistance.** Per-segment width, via-array, and
-   non-Manhattan resistance modeling (today R is Manhattan length × ohm/µm at nominal
-   width). Requires extending the DEF reader to carry per-segment widths.
+3. **Per-segment & geometry-dependent resistance.** Layer-level width dependence ships
+   (`R = rsheet × len / width`, width from the LEF); extend it to **per-segment** widths
+   from non-default routing rules (NDR / `TAPERRULE`), plus via-array and non-Manhattan
+   (corner / bend) resistance. Requires resolving NDRs and carrying per-segment widths
+   through the DEF reader.
 4. **Moment-weighted RC reduction.** Model-order reduction (AWE / PRIMA-style) of the
    distributed tree (`tree.rs`) to a compact, delay-accurate equivalent — and a study of
    accuracy vs. node count for STA.

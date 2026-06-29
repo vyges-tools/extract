@@ -90,7 +90,11 @@ fn node_of(
 /// Returns `None` when there is no usable tree to build (no segments, a single
 /// degenerate point, or a layer missing from the rules) — the caller then falls
 /// back to the lumped star, so behaviour never regresses.
-pub fn build_network(net: &DefNet, rules: &RcRules) -> Option<RcNetwork> {
+pub fn build_network(
+    net: &DefNet,
+    rules: &RcRules,
+    widths: &BTreeMap<String, f64>,
+) -> Option<RcNetwork> {
     if net.segments.is_empty() {
         return None;
     }
@@ -115,7 +119,9 @@ pub fn build_network(net: &DefNet, rules: &RcRules) -> Option<RcNetwork> {
         nodes[a].cap_ff += half_c;
         nodes[b].cap_ff += half_c;
         if a != b {
-            edges.push(RcEdge { a, b, res_ohm: len * l.res_per_um });
+            let w = widths.get(&seg.layer).copied().unwrap_or(0.0);
+            let res_ohm = rules.wire_res(&seg.layer, len, w).unwrap_or(len * l.res_per_um);
+            edges.push(RcEdge { a, b, res_ohm });
         }
     }
 
@@ -191,7 +197,7 @@ mod tests {
             vias: 0,
         };
         let rules = RcRules::parse("met1 0.1 0.05 0.0\n").unwrap();
-        let t = build_network(&net, &rules).unwrap();
+        let t = build_network(&net, &rules, &BTreeMap::new()).unwrap();
         assert_eq!(t.nodes.len(), 2);
         assert_eq!(t.edges.len(), 1);
         assert!((t.raw_res - 1.0).abs() < 1e-9, "10um * 0.1 = 1.0"); // wire R
@@ -219,7 +225,7 @@ mod tests {
             vias: 0,
         };
         let rules = RcRules::parse("met1 0.1 0.05 0.0\n").unwrap();
-        let t = build_network(&net, &rules).unwrap();
+        let t = build_network(&net, &rules, &BTreeMap::new()).unwrap();
         assert_eq!(t.nodes.len(), 4, "spine end + fork + 2 sink ends");
         assert_eq!(t.edges.len(), 3);
         // the fork vertex (degree 3) carries no pin -> an internal junction
@@ -242,7 +248,7 @@ mod tests {
             vias: 1,
         };
         let rules = RcRules::parse("met1 0.1 0.05 0.0\nmet2 0.1 0.05 0.0\nvia 5.0\n").unwrap();
-        let t = build_network(&net, &rules).unwrap();
+        let t = build_network(&net, &rules, &BTreeMap::new()).unwrap();
         // 3 sub-nodes (met1@0, shared@10 split into met1/met2, met2@8) -> 4 nodes
         assert_eq!(t.nodes.len(), 4);
         // 2 wire resistors + 1 via resistor

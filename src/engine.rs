@@ -56,18 +56,20 @@ pub fn extract(job: &ExtractJob) -> Result<Extraction, ExtractError> {
     let d: Def = def::load(&job.resolve(&job.def)).map_err(|e| ExtractError::Parse(e.to_string()))?;
     let r: RcRules =
         RcRules::load(&job.resolve(&job.rules)).map_err(|e| ExtractError::Parse(e.to_string()))?;
-    let mut nets = d
-        .nets
-        .iter()
-        .map(|n| rc::extract_net(n, &r).map_err(|e| ExtractError::Parse(e.to_string())))
-        .collect::<Result<Vec<_>, _>>()?;
-    // Distributed RC network per net (from routing geometry); None -> lumped star.
-    let trees: Vec<Option<RcNetwork>> = d.nets.iter().map(|n| tree::build_network(n, &r)).collect();
-    // LEF (optional) -> routing widths (edge-to-edge gaps) + thicknesses (field kernel)
+    // LEF (optional) -> routing widths (width-dependent R + edge-to-edge coupling
+    // gaps) + thicknesses (field kernel). Loaded before RC so resistance is width-aware.
     let lef = match &job.lef {
         Some(p) => Lef::load(&job.resolve(p)).map_err(|e| ExtractError::Parse(e.to_string()))?,
         None => Lef::default(),
     };
+    let mut nets = d
+        .nets
+        .iter()
+        .map(|n| rc::extract_net(n, &r, &lef.widths).map_err(|e| ExtractError::Parse(e.to_string())))
+        .collect::<Result<Vec<_>, _>>()?;
+    // Distributed RC network per net (from routing geometry); None -> lumped star.
+    let trees: Vec<Option<RcNetwork>> =
+        d.nets.iter().map(|n| tree::build_network(n, &r, &lef.widths)).collect();
     let couplings = coupling::extract_coupling(&d.nets, &r, &lef.widths, &lef.thicknesses);
     // Conditional ground-cap shielding: a net's coupling is field that would otherwise
     // be grounded fringe, so reduce its grounded cap by `shield_k · Cc_net` (charge

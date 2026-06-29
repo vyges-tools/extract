@@ -54,8 +54,8 @@ fn gds_traced_nets_extract_through_the_rc_core() {
     let vbias = nets.iter().find(|n| n.name == "vbias").unwrap();
     let vsense = nets.iter().find(|n| n.name == "vsense").unwrap();
 
-    let pb = extract_net(vbias, &rules).unwrap();
-    let ps = extract_net(vsense, &rules).unwrap();
+    let pb = extract_net(vbias, &rules, &std::collections::BTreeMap::new()).unwrap();
+    let ps = extract_net(vsense, &rules, &std::collections::BTreeMap::new()).unwrap();
 
     // vbias: 20um met1 -> R 2.5, C 1.56
     assert!((pb.res_ohm - 2.5).abs() < 1e-6, "vbias R={}", pb.res_ohm);
