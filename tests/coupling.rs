@@ -106,3 +106,58 @@ fn interlayer_needs_widths() {
     // zero-width footprints -> no overlap area -> no coupling
     assert!(extract_coupling(&[a, b], &rules, &no_widths(), &no_widths()).is_empty());
 }
+
+#[test]
+fn spatial_index_matches_bruteforce_on_dense_layout() {
+    // A deterministic grid of horizontal wires on two layers at varied offsets;
+    // the indexed result must equal an exhaustive O(n^2) reference exactly
+    // (no dropped pairs, no double counting, identical caps).
+    let rules = RcRules::parse("met1 0.1 0.05 0.1 0.5\nmet2 0.12 0.05 0.08 0.5\n").unwrap();
+    let mut nets: Vec<DefNet> = Vec::new();
+    for i in 0..60u32 {
+        let layer = if i % 2 == 0 { "met1" } else { "met2" };
+        let y = (i as f64) * 0.31; // some pairs within cutoff, some not
+        let x0 = (i % 7) as f64 * 0.2;
+        let mut n = hnet(&format!("n{i}"), x0, x0 + 5.0, y);
+        n.segments[0].layer = layer.into();
+        n.name = format!("n{i}");
+        nets.push(n);
+    }
+    let got = extract_coupling(&nets, &rules, &no_widths(), &no_widths());
+
+    // exhaustive reference using the same public physics path: run each net PAIR
+    // through extract_coupling in isolation and collect the nonzero results.
+    let mut want: std::collections::BTreeMap<(String, String), f64> = Default::default();
+    for i in 0..nets.len() {
+        for j in (i + 1)..nets.len() {
+            let pair = extract_coupling(
+                &[nets[i].clone(), nets[j].clone()],
+                &rules,
+                &no_widths(),
+                &no_widths(),
+            );
+            for c in pair {
+                want.insert((c.a, c.b), c.cap_ff);
+            }
+        }
+    }
+    assert_eq!(got.len(), want.len(), "pair count must match brute force");
+    for c in &got {
+        let w = want.get(&(c.a.clone(), c.b.clone())).expect("pair present in reference");
+        assert!((c.cap_ff - w).abs() < 1e-12, "cap mismatch for {}-{}: {} vs {}", c.a, c.b, c.cap_ff, w);
+    }
+}
+
+#[test]
+fn scales_to_thousands_of_nets() {
+    // 4000 stacked parallel wires; only adjacent ones are within the cutoff, so
+    // the answer is exactly 3999 coupling pairs. The naive all-pairs sweep would
+    // be ~8M net-pair tests; the grid keeps it linear and finishes instantly.
+    let rules = RcRules::parse("met1 0.1 0.05 0.1 0.5\ncouple_cutoff 0.7\n").unwrap();
+    let n = 4000u32;
+    let nets: Vec<DefNet> = (0..n)
+        .map(|i| hnet(&format!("w{i}"), 0.0, 10.0, i as f64 * 0.5))
+        .collect();
+    let cc = extract_coupling(&nets, &rules, &no_widths(), &no_widths());
+    assert_eq!(cc.len() as u32, n - 1, "only adjacent wires (gap 0.5 < 0.7) couple");
+}
