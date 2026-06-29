@@ -26,6 +26,7 @@ pub use vyges_loom::{def, lef};
 pub mod gds;
 pub mod field;
 pub mod rc;
+pub mod tree;
 pub mod coupling;
 pub mod spef;
 pub mod engine;

@@ -14,11 +14,16 @@ use crate::lef::Lef;
 use crate::rc::{self, NetParasitics};
 use crate::rules::RcRules;
 use crate::spef::{self, Units};
+use crate::tree::{self, RcNetwork};
 
 /// Full extraction result: per-net parasitics + inter-net coupling caps.
+///
+/// `trees[i]` is the distributed RC network for `nets[i]` when the routing
+/// geometry supports one (`None` -> the SPEF emitter uses the lumped star).
 #[derive(Debug, Clone)]
 pub struct Extraction {
     pub nets: Vec<NetParasitics>,
+    pub trees: Vec<Option<RcNetwork>>,
     pub couplings: Vec<CouplingCap>,
 }
 
@@ -56,6 +61,8 @@ pub fn extract(job: &ExtractJob) -> Result<Extraction, ExtractError> {
         .iter()
         .map(|n| rc::extract_net(n, &r).map_err(|e| ExtractError::Parse(e.to_string())))
         .collect::<Result<Vec<_>, _>>()?;
+    // Distributed RC network per net (from routing geometry); None -> lumped star.
+    let trees: Vec<Option<RcNetwork>> = d.nets.iter().map(|n| tree::build_network(n, &r)).collect();
     // LEF (optional) -> routing widths (edge-to-edge gaps) + thicknesses (field kernel)
     let lef = match &job.lef {
         Some(p) => Lef::load(&job.resolve(p)).map_err(|e| ExtractError::Parse(e.to_string()))?,
@@ -77,11 +84,18 @@ pub fn extract(job: &ExtractJob) -> Result<Extraction, ExtractError> {
             }
         }
     }
-    Ok(Extraction { nets, couplings })
+    Ok(Extraction { nets, trees, couplings })
 }
 
 /// Full run: extract and render a `.spef`.
 pub fn run_to_spef(job: &ExtractJob) -> Result<String, ExtractError> {
     let ex = extract(job)?;
-    Ok(spef::render(&job.design, &Units::default(), None, &ex.nets, &ex.couplings))
+    Ok(spef::render_distributed(
+        &job.design,
+        &Units::default(),
+        None,
+        &ex.nets,
+        &ex.trees,
+        &ex.couplings,
+    ))
 }

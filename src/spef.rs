@@ -2,11 +2,14 @@
 //!
 //! Emits a Standard Parasitic Exchange Format file with a name map and, per
 //! net, a `*D_NET` record: `*CONN` (the connected instance pins), `*CAP` (the
-//! grounded + coupling capacitance), and `*RES` (the series resistance). The
-//! net is emitted as a **per-pin RC tree** — a star rooted at the net node with
+//! grounded + coupling capacitance), and `*RES` (the series resistance).
+//!
+//! When a net's routing geometry yields a **distributed RC tree** (`tree.rs`),
+//! the net is emitted with that tree's real internal wire-junction nodes and
+//! per-segment / per-via resistors, scaled to the calibrated lumped totals (see
+//! [`render_distributed`]). Without geometry it falls back to a lumped **star** —
 //! a trunk R/2 + near-half C to the driver and a branch R/2K + cap share to each
-//! sink — which reduces to a pi for a single sink and a lump with no R. A
-//! moment-weighted, geometry-aware tree is the refinement.
+//! sink, reducing to a pi for a single sink and a lump with no R.
 //!
 //! Pure std — fully unit-tested offline. No timestamp is embedded unless one is
 //! passed in, so an unchanged run is bit-identical (the M2 reproducibility
@@ -16,6 +19,7 @@ use std::collections::BTreeMap;
 
 use crate::coupling::CouplingCap;
 use crate::rc::NetParasitics;
+use crate::tree::RcNetwork;
 
 #[derive(Debug, Clone)]
 pub struct Units {
@@ -58,6 +62,11 @@ fn val(v: f64) -> String {
     format!("{v:.6}")
 }
 
+/// `(node label, grounded cap)` lines for a net's `*CAP` section.
+type CapLines = Vec<(String, f64)>;
+/// `(node a, node b, ohms)` lines for a net's `*RES` section.
+type ResLines = Vec<(String, String, f64)>;
+
 /// Machine-readable per-net parasitics + coupling summary (std-only, no deps).
 pub fn render_json(design: &str, nets: &[NetParasitics], couplings: &[CouplingCap]) -> String {
     let ground_cap: f64 = nets.iter().map(|n| n.cap_ff).sum();
@@ -94,16 +103,38 @@ pub fn render_json(design: &str, nets: &[NetParasitics], couplings: &[CouplingCa
     s
 }
 
-/// Render a complete SPEF for the given net parasitics + coupling caps.
-///
-/// A coupling cap between nets A and B contributes to **both** nets' total
-/// capacitance but is listed once (under net A) in the `*CAP` section as a
-/// two-node entry, per IEEE 1481.
+/// Render a complete SPEF using the lumped **star** topology for every net (the
+/// fallback when no routing geometry is available). Equivalent to
+/// [`render_distributed`] with all trees `None`.
 pub fn render(
     design: &str,
     units: &Units,
     date: Option<&str>,
     nets: &[NetParasitics],
+    couplings: &[CouplingCap],
+) -> String {
+    let none: Vec<Option<RcNetwork>> = (0..nets.len()).map(|_| None).collect();
+    render_distributed(design, units, date, nets, &none, couplings)
+}
+
+/// Render a complete SPEF, emitting each net as a **distributed RC tree** when
+/// `trees[i]` is present and a lumped star otherwise.
+///
+/// The distributed network (from `tree::build_network`) carries the real routing
+/// topology — internal wire-junction nodes and per-segment / per-via resistors.
+/// Its node caps and edge resistances are *scaled back* to the net's calibrated
+/// lumped `cap_ff` / `res_ohm`, so magnitudes match the rule deck exactly while
+/// the topology gains the detail delay/SI sign-off needs.
+///
+/// A coupling cap between nets A and B contributes to **both** nets' total
+/// capacitance but is listed once (under net A) in the `*CAP` section as a
+/// two-node entry, per IEEE 1481.
+pub fn render_distributed(
+    design: &str,
+    units: &Units,
+    date: Option<&str>,
+    nets: &[NetParasitics],
+    trees: &[Option<RcNetwork>],
     couplings: &[CouplingCap],
 ) -> String {
     // Name map: all net names first (so net ids are contiguous 1..N and coupling
@@ -114,6 +145,22 @@ pub fn render(
         .iter()
         .map(|net| net.pins.iter().map(|(inst, pin)| (nm.intern(inst), pin.clone())).collect())
         .collect();
+
+    // The node each net presents to a coupling neighbour: the driver vertex when a
+    // tree exists, else the net-id root of the star. Lets a coupling entry name a
+    // real node on both sides regardless of each net's topology.
+    let rep_label = |n: usize| -> String {
+        match trees.get(n).and_then(|t| t.as_ref()) {
+            Some(_) if !pin_ids[n].is_empty() => {
+                let (iid, pin) = &pin_ids[n][0];
+                format!("{iid}:{pin}")
+            }
+            Some(_) => format!("{}:0", net_ids[n]), // pinless tree -> first internal node
+            None => format!("{}", net_ids[n]),      // star root
+        }
+    };
+    let id_of: BTreeMap<&str, usize> =
+        nets.iter().enumerate().map(|(i, n)| (n.name.as_str(), i)).collect();
 
     // Per-net coupling totals (both endpoints) + the list of couplings to emit
     // under each net (keyed by net A).
@@ -160,44 +207,10 @@ pub fn render(
             s.push_str(&format!("*I *{iid}:{pin} I\n"));
         }
 
-        // Per-pin RC tree: a star rooted at the net node. The driver (pin 0) is
-        // the near end — half the grounded C and the trunk R/2; the sinks share
-        // the far half, each on its own branch (cap (C/2)/K, branch R/2K to the
-        // root). This differentiates sinks (vs lumping the far C at one node)
-        // and reduces to the pi for a single sink. Degrades to a 2-node pi for
-        // one pin, and to a single lump with no series R. Uniform apportionment
-        // (no per-pin geometry yet); coupling stays at the root (net node).
-        let g = net.cap_ff;
-        let r = net.res_ohm;
-        let pins = &pin_ids[n];
-        let mut caps: Vec<(String, f64)> = Vec::new(); // (node, grounded cap)
-        let mut res_lines: Vec<(String, String, f64)> = Vec::new(); // (a, b, ohm)
-        let node = |iid: usize, pin: &str| format!("{iid}:{pin}");
-
-        if r <= 0.0 {
-            caps.push((format!("{nid}"), g)); // single lump
-        } else if pins.is_empty() {
-            caps.push((format!("{nid}"), g / 2.0));
-            caps.push((format!("{nid}:far"), g / 2.0));
-            res_lines.push((format!("{nid}"), format!("{nid}:far"), r));
-        } else {
-            let (diid, dpin) = &pins[0]; // driver = pin 0
-            let dnode = node(*diid, dpin);
-            caps.push((dnode.clone(), g / 2.0)); // near half
-            let sinks = &pins[1..];
-            if sinks.is_empty() {
-                caps.push((format!("{nid}"), g / 2.0)); // far half at root
-                res_lines.push((format!("{nid}"), dnode, r));
-            } else {
-                res_lines.push((format!("{nid}"), dnode, r / 2.0)); // trunk
-                let k = sinks.len() as f64;
-                for (siid, spin) in sinks {
-                    let sn = node(*siid, spin);
-                    caps.push((sn.clone(), (g / 2.0) / k));
-                    res_lines.push((format!("{nid}"), sn, r / 2.0 / k)); // branch
-                }
-            }
-        }
+        let (caps, res_lines) = match trees.get(n).and_then(|t| t.as_ref()) {
+            Some(net_tree) => emit_tree(nid, net_tree, &nm, net.cap_ff, net.res_ohm),
+            None => emit_star(nid, &pin_ids[n], net.cap_ff, net.res_ohm),
+        };
 
         s.push_str("*CAP\n");
         let mut ci = 0;
@@ -205,12 +218,15 @@ pub fn render(
             ci += 1;
             s.push_str(&format!("{ci} *{n_} {}\n", val(*c)));
         }
-        // coupling caps listed under net A at the root (net node)
+        // coupling caps listed under net A, between A's and B's representative nodes
         if let Some(list) = under.get(&net.name) {
+            let rep_a = rep_label(n);
             for c in list {
                 ci += 1;
-                let bid = nm.id(&c.b).unwrap_or(nid);
-                s.push_str(&format!("{ci} *{nid} *{bid} {}\n", val(c.cap_ff)));
+                let rep_b = id_of.get(c.b.as_str()).map(|&j| rep_label(j)).unwrap_or_else(|| {
+                    nm.id(&c.b).map(|b| b.to_string()).unwrap_or_else(|| nid.to_string())
+                });
+                s.push_str(&format!("{ci} *{rep_a} *{rep_b} {}\n", val(c.cap_ff)));
             }
         }
         if !res_lines.is_empty() {
@@ -224,4 +240,77 @@ pub fn render(
     }
 
     s
+}
+
+/// Distributed emission: scale the geometric tree to the calibrated per-net
+/// totals and render its nodes (`*CAP`) and edges (`*RES`). Pin nodes keep their
+/// `inst:pin` label; internal junctions are `netid:nodeindex`.
+fn emit_tree(
+    nid: usize,
+    t: &RcNetwork,
+    nm: &NameMap,
+    cap_ff: f64,
+    res_ohm: f64,
+) -> (CapLines, ResLines) {
+    let scale_c = if t.raw_cap > 0.0 { cap_ff / t.raw_cap } else { 0.0 };
+    let scale_r = if t.raw_res > 0.0 { res_ohm / t.raw_res } else { 0.0 };
+    let label = |i: usize| -> String {
+        match &t.nodes[i].pin {
+            Some((inst, pin)) => format!("{}:{}", nm.id(inst).unwrap_or(0), pin),
+            None => format!("{nid}:{i}"),
+        }
+    };
+    let mut caps: Vec<(String, f64)> = Vec::new();
+    for (i, node) in t.nodes.iter().enumerate() {
+        let mut c = node.cap_ff * scale_c;
+        // if the rule deck gives no grounded cap to distribute, lump the net total
+        // at the first node so charge is never silently dropped
+        if t.raw_cap <= 0.0 && i == 0 {
+            c = cap_ff;
+        }
+        caps.push((label(i), c));
+    }
+    let res_lines: Vec<(String, String, f64)> =
+        t.edges.iter().map(|e| (label(e.a), label(e.b), e.res_ohm * scale_r)).collect();
+    (caps, res_lines)
+}
+
+/// Lumped star emission (the geometry-free fallback): driver near-half + per-sink
+/// far-half branches off the net-id root. Reduces to a pi for one sink and a lump
+/// with no series R.
+fn emit_star(
+    nid: usize,
+    pins: &[(usize, String)],
+    g: f64,
+    r: f64,
+) -> (CapLines, ResLines) {
+    let mut caps: Vec<(String, f64)> = Vec::new();
+    let mut res_lines: Vec<(String, String, f64)> = Vec::new();
+    let node = |iid: usize, pin: &str| format!("{iid}:{pin}");
+
+    if r <= 0.0 {
+        caps.push((format!("{nid}"), g)); // single lump
+    } else if pins.is_empty() {
+        caps.push((format!("{nid}"), g / 2.0));
+        caps.push((format!("{nid}:far"), g / 2.0));
+        res_lines.push((format!("{nid}"), format!("{nid}:far"), r));
+    } else {
+        let (diid, dpin) = &pins[0]; // driver = pin 0
+        let dnode = node(*diid, dpin);
+        caps.push((dnode.clone(), g / 2.0)); // near half
+        let sinks = &pins[1..];
+        if sinks.is_empty() {
+            caps.push((format!("{nid}"), g / 2.0)); // far half at root
+            res_lines.push((format!("{nid}"), dnode, r));
+        } else {
+            res_lines.push((format!("{nid}"), dnode, r / 2.0)); // trunk
+            let k = sinks.len() as f64;
+            for (siid, spin) in sinks {
+                let sn = node(*siid, spin);
+                caps.push((sn.clone(), (g / 2.0) / k));
+                res_lines.push((format!("{nid}"), sn, r / 2.0 / k)); // branch
+            }
+        }
+    }
+    (caps, res_lines)
 }

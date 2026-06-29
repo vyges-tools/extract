@@ -103,6 +103,10 @@ fn analog_block_renders_spef() {
     assert!(spef.contains("*1 vbias") && spef.contains("*2 vsense") && spef.contains("*3 vsupply"));
     // vbias total = ground 1.56 + coupling 0.081395 = 1.641395.
     assert!(spef.contains("*D_NET *1 1.641395"), "vbias total\n{spef}");
-    // coupling listed once, under net A (vbias), as a two-node *CAP entry.
-    assert!(spef.contains(" *1 *2 0.081395"), "coupling vbias-vsense\n{spef}");
+    // coupling listed once as a two-node *CAP entry (between the nets' real
+    // representative nodes now that each net is a distributed tree).
+    assert!(
+        spef.lines().any(|l| l.contains("0.081395") && l.matches('*').count() == 2),
+        "coupling vbias-vsense two-node entry\n{spef}"
+    );
 }

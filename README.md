@@ -139,7 +139,7 @@ out of the box on open PDKs (sky130, gf180) using bundled reference rules.
 ```text
   vyges-extract — OPEN engine  (Apache-2.0, contains no fab data)
   ────────────────────────────────────────────────────────────────────
-    *.def  ─►  def.rs ─► rc.rs ─► spef.rs  ─►  *.spef
+    *.def  ─►  def.rs ─► rc.rs + tree.rs ─► spef.rs  ─►  *.spef
                           ▲
                           └─ published plugin contract
                              (.rules: ohm/µm · fF/µm · coupling · per-via Ω)
@@ -233,13 +233,18 @@ research-grade work.
 
 **v1** is a **rule-based** extractor with **lateral coupling capacitance** from
 segment adjacency: grounded R/C per net plus per-net-pair coupling caps, emitted
-in SPEF as a **per-pin RC tree** — a star rooted at the net node, with a trunk
-to the driver and a branch to each sink (reducing to a pi for a single sink)
+in SPEF as a **distributed RC tree built from the routing geometry** — routing
+vertices become nodes, wire segments become resistors with end-split caps, and via
+stacks become resistors between the per-layer sub-nodes, so the SPEF carries genuine
+internal wire-junction nodes (not a star). Node caps and resistances are scaled back
+to the calibrated per-net totals, so the distributed model adds topology without
+re-correlating magnitudes; a net with no usable geometry falls back to a lumped star
 (totals include coupling on both nets). Coupling has both a **lateral** term
 (edge-to-edge gap when a tech LEF supplies routing widths, centerline otherwise)
-and an **inter-layer** crossover term (areal, over footprint overlap). Runs fully
-offline, no external deps, 21 tests green. Enough to feed STA/SI and to validate
-the whole `def → spef → timing` seam end to end.
+and an **inter-layer** crossover term (areal, over footprint overlap). Coupling
+extraction is spatially indexed (a uniform grid), so cost scales with routed area
+rather than net-count squared. Runs fully offline, no external deps, 43 tests green.
+Enough to feed STA/SI and to validate the whole `def → spef → timing` seam end to end.
 
 **Correlated against OpenRCX** on a real routed sky130 block (the M0 counter, 45
 signal nets, LEF-derived rules from `sky130_fd_sc_hd__nom.tlef`): raw first-principles
@@ -280,5 +285,8 @@ global coefficient captures. Closing it requires **true per-net field solving**
 against the actual layout — the research-grade endpoint commercial sign-off extractors occupy.
 
 The road to sign-off grade is therefore a genuine **2.5-D field/pattern-matched
-solver** per net (not more global coefficients), plus a geometry-aware
-moment-weighted RC tree. Same file formats and CLI; same `run` command, no license.
+solver** per net (not more global coefficients). The distributed RC tree is now
+built from the routing geometry; **moment-weighted** reduction and pin-access-accurate
+attachment (reading pin locations from LEF/DEF `PINS` rather than binding pins to the
+tree's leaf vertices) are the remaining tree refinements. Same file formats and CLI;
+same `run` command, no license.

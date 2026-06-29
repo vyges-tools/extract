@@ -14,6 +14,7 @@ use vyges_extract::engine;
 use vyges_extract::job::ExtractJob;
 use vyges_extract::rc::NetParasitics;
 use vyges_extract::spef::{self, Units};
+use vyges_extract::tree::RcNetwork;
 
 const USAGE: &str = "\
 vyges-extract — foundry-correlated RC parasitic extraction (DEF -> SPEF)
@@ -110,11 +111,17 @@ fn write_out(text: &str, cli: &Cli) {
     }
 }
 
-fn render(design: &str, nets: &[NetParasitics], couplings: &[CouplingCap], cli: &Cli) -> String {
+fn render(
+    design: &str,
+    nets: &[NetParasitics],
+    trees: &[Option<RcNetwork>],
+    couplings: &[CouplingCap],
+    cli: &Cli,
+) -> String {
     if cli.json {
         spef::render_json(design, nets, couplings)
     } else {
-        spef::render(design, &Units::default(), None, nets, couplings)
+        spef::render_distributed(design, &Units::default(), None, nets, trees, couplings)
     }
 }
 
@@ -168,7 +175,7 @@ fn main() {
 
     match cmd.as_str() {
         "demo" => {
-            write_out(&render("vyges_extract_demo", &demo_nets(), &demo_couplings(), &cli), &cli)
+            write_out(&render("vyges_extract_demo", &demo_nets(), &[], &demo_couplings(), &cli), &cli)
         }
         "check" => {
             let Some(path) = cli.positionals.get(1) else {
@@ -208,7 +215,7 @@ fn main() {
                             job.def
                         );
                     }
-                    write_out(&render(&job.design, &ex.nets, &ex.couplings, &cli), &cli);
+                    write_out(&render(&job.design, &ex.nets, &ex.trees, &ex.couplings, &cli), &cli);
                 }
                 Err(e) => {
                     eprintln!("error: {e}");
