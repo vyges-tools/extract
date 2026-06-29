@@ -326,5 +326,9 @@ baseline.
 6. **Spatial-scaling & parallelism.** The coupling grid (`coupling.rs`) scales with routed
    area; characterize it on full blocks and explore parallel / out-of-core extraction.
 
-Contributions welcome — open an issue or PR. The correlation harness makes
-before/after numbers easy to report in a paper.
+**Working on one of these — or want to?** We're actively pursuing several of these areas
+ourselves, but the open frontier is bigger than any one team, and we'd rather build it in
+the open than wait. If an item here fits your research, a student project, a thesis, or just
+an itch, we'd genuinely like to hear from you — open an issue, send a PR, or reach us at
+<https://vyges.com/contact>. Promising directions become collaborations; the correlation
+harness makes before/after numbers easy to report in a paper.
