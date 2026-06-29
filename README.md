@@ -306,25 +306,33 @@ is a self-contained, publishable direction; the engine's file-in/file-out bounda
 new method can be dropped in behind the same SPEF output and measured against the existing
 baseline.
 
-1. **2.5-D field / pattern-matched extraction.** Replace the analytic coupling kernel
-   (`field.rs`) with a real field solve or a pattern-matched library per net. *Open
-   question:* close the ±40 % per-net spread the analytic ceiling leaves, on open PDKs,
-   without foundry data. Baseline + harness: [`correlation/openrcx-counter.md`].
-2. **Calibration methodology to silicon.** A principled, documented procedure to correlate
-   the rule/field coefficients to *measured silicon* (not just OpenRCX), with uncertainty
-   bounds. *Publishable as:* an open calibration flow + dataset for sky130/gf180.
-3. **Geometry-dependent resistance.** Width dependence ships (`R = rsheet × len /
-   width`), with per-segment widths from non-default rules (`NONDEFAULTRULE` /
-   `TAPERRULE`) now resolved by the DEF reader. Remaining: **via-array** (multi-cut)
-   resistance, **per-layer / per-cut** via resistance (today one global `via` ohm), and
-   **non-Manhattan** (corner / bend) wire resistance.
-4. **Moment-weighted RC reduction.** Model-order reduction (AWE / PRIMA-style) of the
-   distributed tree (`tree.rs`) to a compact, delay-accurate equivalent — and a study of
-   accuracy vs. node count for STA.
-5. **Pin-access-accurate attachment.** Bind parasitics to true pin-access locations from
-   LEF/DEF `PINS` instead of the tree's leaf vertices, and quantify the delay impact.
-6. **Spatial-scaling & parallelism.** The coupling grid (`coupling.rs`) scales with routed
-   area; characterize it on full blocks and explore parallel / out-of-core extraction.
+Several already have a working baseline you can build straight on top of — each item names
+the **code anchor** (the file / function that is the foundation and the natural drop-in point).
+
+1. **2.5-D field / pattern-matched extraction.** Replace the analytic coupling kernel with a
+   real field solve or a pattern-matched library per net. *Open question:* close the ±40 %
+   per-net spread the analytic ceiling leaves, on open PDKs, without foundry data.
+   *Start from:* the analytic kernel in `field.rs` and its call site `coupling.rs::extract_coupling`
+   — swap the kernel behind the same SPEF output and score with [`correlation/openrcx-counter.md`].
+2. **Calibration methodology to silicon.** A principled, documented procedure to correlate the
+   rule/field coefficients to *measured silicon* (not just OpenRCX), with uncertainty bounds.
+   *Start from:* the per-layer cap fit and the `correlation/` harness — extend it into a
+   silicon-referenced flow + dataset for sky130/gf180.
+3. **Geometry-dependent resistance.** Width dependence ships (`R = rsheet × len / width`), with
+   per-segment widths from non-default rules (`NONDEFAULTRULE` / `TAPERRULE`) now resolved by the
+   DEF reader. Remaining: **via-array** (multi-cut) and **per-layer / per-cut** via resistance
+   (today one global `via` ohm), and **non-Manhattan** (corner / bend) wire resistance.
+   *Start from:* `RcRules::wire_res()` and the `rsheet` rule — add the via/corner terms alongside.
+4. **Moment-weighted RC reduction.** Model-order reduction (AWE / PRIMA-style) to a compact,
+   delay-accurate equivalent — with a study of accuracy vs. node count for STA.
+   *Start from:* the `RcNetwork` (nodes/edges) built in `tree.rs` — add a reduction pass before
+   `spef::render_distributed` consumes it.
+5. **Pin-access-accurate attachment.** Bind parasitics to true pin-access locations instead of
+   the tree's leaf vertices, and quantify the delay impact. *Start from:* the leaf-binding loop
+   in `tree::build_network` — replace the deterministic leaf assignment with LEF/DEF `PINS`
+   coordinates.
+6. **Spatial-scaling & parallelism.** Characterize the extractor on full blocks and explore
+   parallel / out-of-core extraction. *Start from:* the uniform grid in `coupling.rs::extract_coupling`.
 
 **Working on one of these — or want to?** We're actively pursuing several of these areas
 ourselves, but the open frontier is bigger than any one team, and we'd rather build it in
