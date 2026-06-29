@@ -194,10 +194,10 @@ fn rect_to_segment(layer: &str, r: &Rect, scale: f64) -> Segment {
     let cy = (r.y0 + r.y1) as f64 / 2.0 / scale;
     if w >= h {
         // horizontal centerline at cy spanning x0..x1
-        Segment { layer: layer.into(), x0: r.x0 as f64 / scale, y0: cy, x1: r.x1 as f64 / scale, y1: cy }
+        Segment::wire(layer, r.x0 as f64 / scale, cy, r.x1 as f64 / scale, cy)
     } else {
         // vertical centerline at cx spanning y0..y1
-        Segment { layer: layer.into(), x0: cx, y0: r.y0 as f64 / scale, x1: cx, y1: r.y1 as f64 / scale }
+        Segment::wire(layer, cx, r.y0 as f64 / scale, cx, r.y1 as f64 / scale)
     }
 }
 

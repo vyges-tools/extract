@@ -18,4 +18,4 @@ source = "git+https://github.com/vyges-tools/layout?branch=main#43c7d3f275a30241
 [[package]]
 name = "vyges-loom"
 version = "0.0.1"
-source = "git+https://github.com/vyges-tools/loom?branch=main#7f4aac6ffbeb6d01bcac7cf4e99d4f0afa28c844"
+source = "git+https://github.com/vyges-tools/loom?branch=main#e6c1dc77643f7b5743676b024058d30ccecdf63d"

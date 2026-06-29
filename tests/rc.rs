@@ -12,8 +12,8 @@ fn lumps_res_and_cap_over_segments_and_vias() {
         name: "clk".into(),
         pins: vec![("ff0".into(), "CLK".into())],
         segments: vec![
-            Segment { layer: "met1".into(), x0: 0.0, y0: 0.0, x1: 3.0, y1: 0.0 },
-            Segment { layer: "met2".into(), x0: 0.0, y0: 0.0, x1: 3.0, y1: 0.0 },
+            Segment::wire("met1", 0.0, 0.0, 3.0, 0.0),
+            Segment::wire("met2", 0.0, 0.0, 3.0, 0.0),
         ],
         vias: 1,
     };
@@ -28,7 +28,7 @@ fn unknown_layer_is_an_error_not_silent() {
     let net = DefNet {
         name: "x".into(),
         pins: vec![],
-        segments: vec![Segment { layer: "met9".into(), x0: 0.0, y0: 0.0, x1: 1.0, y1: 0.0 }],
+        segments: vec![Segment::wire("met9", 0.0, 0.0, 1.0, 0.0)],
         vias: 0,
     };
     assert!(extract_net(&net, &rules(), &std::collections::BTreeMap::new()).is_err());
@@ -42,7 +42,7 @@ fn resistance_is_width_dependent_with_sheet_rho() {
     let net = DefNet {
         name: "n".into(),
         pins: vec![],
-        segments: vec![Segment { layer: "met1".into(), x0: 0.0, y0: 0.0, x1: 10.0, y1: 0.0 }],
+        segments: vec![Segment::wire("met1", 0.0, 0.0, 10.0, 0.0)],
         vias: 0,
     };
     let mut narrow = BTreeMap::new();
@@ -57,4 +57,25 @@ fn resistance_is_width_dependent_with_sheet_rho() {
     // with no width supplied, falls back to the width-blind res column (0.125/um)
     let rb = extract_net(&net, &rules, &BTreeMap::new()).unwrap().res_ohm;
     assert!((rb - 1.25).abs() < 1e-9, "fallback R = {rb}");
+}
+
+#[test]
+fn ndr_segment_width_overrides_layer_default() {
+    use std::collections::BTreeMap;
+    let rules = RcRules::parse("met1 0.125 0.078\nrsheet met1 0.1\n").unwrap();
+    let mut widths = BTreeMap::new();
+    widths.insert("met1".to_string(), 0.5); // LEF default width
+
+    // default-width net: R = rsheet*len/width = 0.1*10/0.5 = 2.0
+    let seg = Segment::wire("met1", 0.0, 0.0, 10.0, 0.0);
+    let def_net = DefNet { name: "a".into(), pins: vec![], segments: vec![seg.clone()], vias: 0 };
+    let r_default = extract_net(&def_net, &rules, &widths).unwrap().res_ohm;
+    assert!((r_default - 2.0).abs() < 1e-9, "default-width R = {r_default}");
+
+    // an NDR draws this wire at 1.0um -> R = 0.1*10/1.0 = 1.0, overriding the LEF 0.5
+    let mut wide = seg;
+    wide.width_um = 1.0;
+    let ndr_net = DefNet { name: "b".into(), pins: vec![], segments: vec![wide], vias: 0 };
+    let r_wide = extract_net(&ndr_net, &rules, &widths).unwrap().res_ohm;
+    assert!((r_wide - 1.0).abs() < 1e-9, "NDR width overrides the LEF default: {r_wide}");
 }

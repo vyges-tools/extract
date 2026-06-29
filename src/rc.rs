@@ -50,7 +50,12 @@ pub fn extract_net(
         let l = rules.layer(&seg.layer).ok_or_else(|| {
             RcError(format!("net {}: no rule for layer {:?}", net.name, seg.layer))
         })?;
-        let w = widths.get(&seg.layer).copied().unwrap_or(0.0);
+        // per-segment NDR width wins over the layer default (LEF) when one is drawn
+        let w = if seg.width_um > 0.0 {
+            seg.width_um
+        } else {
+            widths.get(&seg.layer).copied().unwrap_or(0.0)
+        };
         res_ohm += rules.wire_res(&seg.layer, seg.len_um(), w).unwrap_or(0.0);
         cap_ff += seg.len_um() * l.cap_per_um; // grounded cap; coupling is separate (see coupling.rs)
     }

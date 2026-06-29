@@ -12,7 +12,7 @@ fn hnet(name: &str, x0: f64, x1: f64, y: f64) -> DefNet {
     DefNet {
         name: name.into(),
         pins: vec![],
-        segments: vec![Segment { layer: "met1".into(), x0, y0: y, x1, y1: y }],
+        segments: vec![Segment::wire("met1", x0, y, x1, y)],
         vias: 0,
     }
 }
@@ -72,7 +72,7 @@ fn seg(layer: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> DefNet {
     DefNet {
         name: layer.into(),
         pins: vec![],
-        segments: vec![Segment { layer: layer.into(), x0, y0, x1, y1 }],
+        segments: vec![Segment::wire(layer, x0, y0, x1, y1)],
         vias: 0,
     }
 }

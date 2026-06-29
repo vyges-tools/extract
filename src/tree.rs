@@ -119,7 +119,11 @@ pub fn build_network(
         nodes[a].cap_ff += half_c;
         nodes[b].cap_ff += half_c;
         if a != b {
-            let w = widths.get(&seg.layer).copied().unwrap_or(0.0);
+            let w = if seg.width_um > 0.0 {
+                seg.width_um
+            } else {
+                widths.get(&seg.layer).copied().unwrap_or(0.0)
+            };
             let res_ohm = rules.wire_res(&seg.layer, len, w).unwrap_or(len * l.res_per_um);
             edges.push(RcEdge { a, b, res_ohm });
         }
@@ -185,7 +189,7 @@ mod tests {
     use crate::def::Segment;
 
     fn seg(layer: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> Segment {
-        Segment { layer: layer.into(), x0, y0, x1, y1 }
+        Segment::wire(layer, x0, y0, x1, y1)
     }
 
     #[test]
