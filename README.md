@@ -290,3 +290,32 @@ built from the routing geometry; **moment-weighted** reduction and pin-access-ac
 attachment (reading pin locations from LEF/DEF `PINS` rather than binding pins to the
 tree's leaf vertices) are the remaining tree refinements. Same file formats and CLI;
 same `run` command, no license.
+
+## For researchers — open problems
+
+`vyges-extract` is a clean, std-only, fully open codebase with honest baselines and a
+reproducible correlation harness — a good substrate for student research. Each item below
+is a self-contained, publishable direction; the engine's file-in/file-out boundary means a
+new method can be dropped in behind the same SPEF output and measured against the existing
+baseline.
+
+1. **2.5-D field / pattern-matched extraction.** Replace the analytic coupling kernel
+   (`field.rs`) with a real field solve or a pattern-matched library per net. *Open
+   question:* close the ±40 % per-net spread the analytic ceiling leaves, on open PDKs,
+   without foundry data. Baseline + harness: [`correlation/openrcx-counter.md`].
+2. **Calibration methodology to silicon.** A principled, documented procedure to correlate
+   the rule/field coefficients to *measured silicon* (not just OpenRCX), with uncertainty
+   bounds. *Publishable as:* an open calibration flow + dataset for sky130/gf180.
+3. **Width- and geometry-dependent resistance.** Per-segment width, via-array, and
+   non-Manhattan resistance modeling (today R is Manhattan length × ohm/µm at nominal
+   width). Requires extending the DEF reader to carry per-segment widths.
+4. **Moment-weighted RC reduction.** Model-order reduction (AWE / PRIMA-style) of the
+   distributed tree (`tree.rs`) to a compact, delay-accurate equivalent — and a study of
+   accuracy vs. node count for STA.
+5. **Pin-access-accurate attachment.** Bind parasitics to true pin-access locations from
+   LEF/DEF `PINS` instead of the tree's leaf vertices, and quantify the delay impact.
+6. **Spatial-scaling & parallelism.** The coupling grid (`coupling.rs`) scales with routed
+   area; characterize it on full blocks and explore parallel / out-of-core extraction.
+
+Contributions welcome — open an issue or PR. The correlation harness makes
+before/after numbers easy to report in a paper.
