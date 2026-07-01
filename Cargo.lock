@@ -11,9 +11,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "vyges-geom"
+version = "0.1.0"
+source = "git+https://github.com/vyges-tools/geom?branch=main#7d8ec5d00f84d936d883d0dd6f79b3d43d84730e"
+
+[[package]]
 name = "vyges-layout"
 version = "0.0.1"
-source = "git+https://github.com/vyges-tools/layout?branch=main#43c7d3f275a302418a621f1b732eae8dd34441c0"
+source = "git+https://github.com/vyges-tools/layout?branch=main#29556aebf803f48ec7cb2961aebc9b3a1406199b"
+dependencies = [
+ "vyges-geom",
+]
 
 [[package]]
 name = "vyges-loom"

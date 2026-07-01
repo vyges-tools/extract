@@ -291,7 +291,7 @@ pub fn trace_library(lib: &Library, top: &str, map: &LayerMap) -> Result<Vec<Def
 
 /// Load a GDS file + layer map and trace `DefNet`s (the `gds -> DefNet` on-ramp).
 pub fn trace_gds(gds_path: &str, top: &str, map_path: &str) -> Result<Vec<DefNet>, GdsError> {
-    let lib = Library::load(gds_path).map_err(|e| GdsError(e.to_string()))?;
+    let lib = Library::load_any(gds_path).map_err(GdsError)?;
     let map = LayerMap::load(map_path)?;
     trace_library(&lib, top, &map)
 }
