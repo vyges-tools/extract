@@ -16,6 +16,7 @@ repository = "https://github.com/vyges-tools/extract"
 [dependencies]
 vyges-loom = { git = "https://github.com/vyges-tools/loom", branch = "main" }
 vyges-layout = { git = "https://github.com/vyges-tools/layout", branch = "main" }
+rayon = "1"
 
 [[bin]]
 name = "vyges-extract"

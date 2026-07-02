@@ -29,6 +29,7 @@ flags:
   --json           per-net parasitics summary as JSON instead of SPEF
   -q, --quiet      suppress non-essential output
   -v, --verbose    extra detail on stderr
+  -j, --threads N  parallel worker threads (default: all cores; 1 = serial)
   -h, --help       show this help
   -V, --version    show version
   --bug-report     file a bug (central: vyges/community)
@@ -58,6 +59,7 @@ fn link(label: &str, url: &str) {
 struct Cli {
     positionals: Vec<String>,
     out: Option<String>,
+    threads: Option<usize>,
     json: bool,
     quiet: bool,
     verbose: bool,
@@ -76,6 +78,10 @@ fn parse_cli(args: &[String]) -> Cli {
         match args[i].as_str() {
             "-o" => {
                 c.out = args.get(i + 1).cloned();
+                i += 1;
+            }
+            "-j" | "--threads" => {
+                c.threads = args.get(i + 1).and_then(|s| s.parse().ok());
                 i += 1;
             }
             "--json" => c.json = true,
@@ -149,6 +155,12 @@ fn demo_couplings() -> Vec<CouplingCap> {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cli = parse_cli(&args);
+
+    // Size the rayon thread pool once, before any parallel extraction. Default (flag absent)
+    // lets rayon use all available cores; `-j N` caps it (`-j 1` = serial).
+    if let Some(n) = cli.threads {
+        let _ = rayon::ThreadPoolBuilder::new().num_threads(n).build_global();
+    }
 
     if cli.bug_report {
         return link("Report a bug (central — vyges/community)", BUG_URL);

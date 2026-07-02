@@ -7,6 +7,8 @@
 //! mirroring how `vyges-char` degrades when `ngspice` is absent.
 
 
+use rayon::prelude::*;
+
 use crate::coupling::{self, CouplingCap};
 use crate::def::{self, Def};
 use crate::job::ExtractJob;
@@ -53,7 +55,20 @@ impl std::error::Error for ExtractError {}
 
 /// Load the job's DEF + rules; extract per-net parasitics and coupling caps.
 pub fn extract(job: &ExtractJob) -> Result<Extraction, ExtractError> {
+    // Optional per-phase wall-clock breakdown (set VYGES_TIMING=1) — isolates the parallel
+    // phases (per-net RC, coupling) from the serial DEF parse when benchmarking thread scaling.
+    let timing = std::env::var_os("VYGES_TIMING").is_some();
+    let mut t = std::time::Instant::now();
+    macro_rules! lap {
+        ($label:expr) => {
+            if timing {
+                eprintln!("[timing] {:<14} {:.2}s", $label, t.elapsed().as_secs_f64());
+                t = std::time::Instant::now();
+            }
+        };
+    }
     let d: Def = def::load(&job.resolve(&job.def)).map_err(|e| ExtractError::Parse(e.to_string()))?;
+    lap!("parse DEF");
     let r: RcRules =
         RcRules::load(&job.resolve(&job.rules)).map_err(|e| ExtractError::Parse(e.to_string()))?;
     // LEF (optional) -> routing widths (width-dependent R + edge-to-edge coupling
@@ -62,15 +77,21 @@ pub fn extract(job: &ExtractJob) -> Result<Extraction, ExtractError> {
         Some(p) => Lef::load(&job.resolve(p)).map_err(|e| ExtractError::Parse(e.to_string()))?,
         None => Lef::default(),
     };
+    // Per-net RC is independent across nets — extract them in parallel (rayon). The pool
+    // size is set once in main() from `--threads`/`-j` (default: all cores). collect() into
+    // a Result short-circuits on the first net that fails to parse, same as the serial path.
     let mut nets = d
         .nets
-        .iter()
+        .par_iter()
         .map(|n| rc::extract_net(n, &r, &lef.widths).map_err(|e| ExtractError::Parse(e.to_string())))
         .collect::<Result<Vec<_>, _>>()?;
+    lap!("per-net RC");
     // Distributed RC network per net (from routing geometry); None -> lumped star.
     let trees: Vec<Option<RcNetwork>> =
-        d.nets.iter().map(|n| tree::build_network(n, &r, &lef.widths)).collect();
+        d.nets.par_iter().map(|n| tree::build_network(n, &r, &lef.widths)).collect();
+    lap!("per-net trees");
     let couplings = coupling::extract_coupling(&d.nets, &r, &lef.widths, &lef.thicknesses);
+    lap!("coupling");
     // Conditional ground-cap shielding: a net's coupling is field that would otherwise
     // be grounded fringe, so reduce its grounded cap by `shield_k · Cc_net` (charge
     // conservation) — making the ground cap neighbour-dependent, the spread lever.
