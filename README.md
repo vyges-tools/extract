@@ -340,6 +340,18 @@ the **code anchor** (the file / function that is the foundation and the natural 
    routed geometry doesn't fit in RAM at all (stream the grid / spill the accumulator).
    *Start from:* the band partition + grid in `coupling.rs::extract_coupling`, and the
    dense-block harness in `tests/coupling_bench.rs`.
+7. **Real-DEF scaling benchmark.** `tests/coupling_bench.rs` measures the coupling scan on a
+   *synthetic* dense band — enough to show the memory bound holds and the parallel scan stays
+   bit-identical, but a synthetic geometry doesn't capture how real routed blocks scale. A
+   nice student-sized study: run the extractor across a ladder of **real** routed designs
+   (e.g. sky130/OpenROAD-flow-scripts blocks from a small counter up to a full SoC), and plot
+   scan time and peak memory vs. net count, segment count, and routing density, at `-j1` vs.
+   `-jN`. Deliverables that would genuinely help: the parallel *speedup curve* and its knee
+   (where memory bandwidth or the merge caps it), the memory-per-distinct-pair constant on
+   real data, and guidance on when the `VYGES_MAX_COUPLING_PAIRS` safety valve should trip.
+   *Start from:* `tests/coupling_bench.rs` (swap the synthetic generator for a DEF/LEF/`.rules`
+   loader — the `run` subcommand already parses those), and `VYGES_TIMING=1` for the per-phase
+   wall-clock breakdown.
 
 **Working on one of these — or want to?** We're actively pursuing several of these areas
 ourselves, but the open frontier is bigger than any one team, and we'd rather build it in
