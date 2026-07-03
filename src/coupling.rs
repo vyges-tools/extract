@@ -23,6 +23,13 @@
 //! `O(nets² × segments²)` sweep into work that grows with the routed area, not its
 //! square, so the engine holds up on full blocks instead of just small cells.
 //!
+//! *Memory* scales with the number of *distinct* coupling pairs, which on an
+//! ultra-dense block can reach the tens of millions. Two things keep it bounded: the
+//! accumulator is keyed by net index (16 bytes) rather than by cloned name strings,
+//! and a safety valve (`VYGES_MAX_COUPLING_PAIRS`) caps the distinct-pair count so a
+//! pathological input degrades gracefully instead of exhausting RAM — see
+//! [`extract_coupling`].
+//!
 //! Pure std — fully unit-tested offline.
 
 use std::collections::{BTreeMap, HashMap};
@@ -114,11 +121,48 @@ fn pair_cap(
 /// Only spatially-near segment pairs are tested, via a uniform grid (see the
 /// module header) — the result is identical to the exhaustive sweep but the cost
 /// scales with routed area, not net-count squared.
+///
+/// **Memory bound.** The accumulator is keyed by net *index* (`(u32, u32)`), not by
+/// cloned net-name strings, so a distinct coupling pair costs 16 bytes of key rather
+/// than two heap-allocated `String`s — roughly an order of magnitude less on the
+/// dense blocks where the pair count runs into the tens of millions. A safety valve
+/// (`VYGES_MAX_COUPLING_PAIRS`, default [`DEFAULT_MAX_COUPLING_PAIRS`]) caps the number
+/// of *distinct* pairs held at once: past the cap, contributions to already-seen pairs
+/// still accumulate but genuinely new pairs are dropped with a one-line warning, so a
+/// pathological ultra-dense input degrades gracefully instead of exhausting RAM.
 pub fn extract_coupling(
     nets: &[DefNet],
     rules: &RcRules,
     widths: &BTreeMap<String, f64>,
     thicknesses: &BTreeMap<String, f64>,
+) -> Vec<CouplingCap> {
+    extract_coupling_capped(nets, rules, widths, thicknesses, max_coupling_pairs())
+}
+
+/// Distinct-pair cap for the coupling accumulator when none is set via
+/// `VYGES_MAX_COUPLING_PAIRS`. 100M pairs ≈ a few GB with the integer-keyed map — far
+/// above what any real routed block produces (a 10k-net block couples into low
+/// single-digit millions of pairs), so this only ever bites on pathological input.
+pub const DEFAULT_MAX_COUPLING_PAIRS: usize = 100_000_000;
+
+/// Distinct-pair cap from `VYGES_MAX_COUPLING_PAIRS`, else [`DEFAULT_MAX_COUPLING_PAIRS`].
+fn max_coupling_pairs() -> usize {
+    std::env::var("VYGES_MAX_COUPLING_PAIRS")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_MAX_COUPLING_PAIRS)
+}
+
+/// As [`extract_coupling`], but with an explicit cap on the number of distinct net
+/// pairs held in the accumulator (see the memory-bound note there). Exposed for tests
+/// that exercise the safety valve without touching process-wide env.
+pub fn extract_coupling_capped(
+    nets: &[DefNet],
+    rules: &RcRules,
+    widths: &BTreeMap<String, f64>,
+    thicknesses: &BTreeMap<String, f64>,
+    max_pairs: usize,
 ) -> Vec<CouplingCap> {
     let width = |layer: &str| widths.get(layer).copied().unwrap_or(0.0);
     let thickness = |layer: &str| thicknesses.get(layer).copied().unwrap_or(0.0);
@@ -156,7 +200,11 @@ pub fn extract_coupling(
         }
     }
 
-    let mut acc: BTreeMap<(String, String), f64> = BTreeMap::new();
+    // Accumulate by net *index* (u32), not cloned name strings — an order of magnitude
+    // less memory per distinct pair, and no String allocation on the hot path. Names are
+    // resolved once at the end.
+    let mut acc: HashMap<(u32, u32), f64> = HashMap::new();
+    let mut dropped: u64 = 0; // distinct pairs refused once the cap is hit
     for (id, sr) in segs.iter().enumerate() {
         let (xlo, ylo, xhi, yhi) = bbox(sr);
         // gather candidate segment ids from the cells the padded footprint touches
@@ -178,14 +226,40 @@ pub fn extract_coupling(
             let cc = pair_cap(sr.seg, segs[other].seg, rules, &width, &thickness);
             if cc > 0.0 {
                 let (ni, nj) = (sr.net.min(segs[other].net), sr.net.max(segs[other].net));
-                *acc.entry((nets[ni].name.clone(), nets[nj].name.clone())).or_default() += cc;
+                let key = (ni as u32, nj as u32);
+                // Safety valve: keep accumulating into pairs we already track, but stop
+                // registering *new* ones once the cap is reached, so a pathological
+                // ultra-dense block bounds its memory instead of OOM'ing.
+                if let Some(v) = acc.get_mut(&key) {
+                    *v += cc;
+                } else if acc.len() < max_pairs {
+                    acc.insert(key, cc);
+                } else {
+                    dropped += 1;
+                }
             }
         }
     }
-    acc.into_iter()
+    if dropped > 0 {
+        eprintln!(
+            "warning: vyges-extract coupling: distinct net-pair count exceeded the cap of \
+             {max_pairs}; {dropped} further pair(s) dropped to bound memory. Tighten \
+             `couple_cutoff` or raise VYGES_MAX_COUPLING_PAIRS to extract them."
+        );
+    }
+    // Resolve indices → names and sort by (a, b) so output is identical (byte-for-byte
+    // in the rendered SPEF) to the previous name-keyed BTreeMap iteration order.
+    let mut out: Vec<CouplingCap> = acc
+        .into_iter()
         .filter(|(_, c)| *c > 0.0)
-        .map(|((a, b), cap_ff)| CouplingCap { a, b, cap_ff })
-        .collect()
+        .map(|((ni, nj), cap_ff)| CouplingCap {
+            a: nets[ni as usize].name.clone(),
+            b: nets[nj as usize].name.clone(),
+            cap_ff,
+        })
+        .collect();
+    out.sort_unstable_by(|x, y| x.a.cmp(&y.a).then_with(|| x.b.cmp(&y.b)));
+    out
 }
 
 /// Lower bound on grid cell size (um) — stops a near-zero cutoff from producing an

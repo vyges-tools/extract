@@ -331,8 +331,14 @@ the **code anchor** (the file / function that is the foundation and the natural 
    the tree's leaf vertices, and quantify the delay impact. *Start from:* the leaf-binding loop
    in `tree::build_network` — replace the deterministic leaf assignment with LEF/DEF `PINS`
    coordinates.
-6. **Spatial-scaling & parallelism.** Characterize the extractor on full blocks and explore
-   parallel / out-of-core extraction. *Start from:* the uniform grid in `coupling.rs::extract_coupling`.
+6. **Spatial-scaling & parallelism.** Per-net RC and RC-tree construction already run in
+   parallel (`-j`/`--threads`, rayon), and coupling aggregation is now memory-bounded — keyed
+   by net index with a distinct-pair safety valve (`VYGES_MAX_COUPLING_PAIRS`) so ultra-dense
+   blocks degrade gracefully instead of exhausting RAM. The open frontier is a *memory-bounded
+   parallel* coupling aggregation (partition the pair space so per-thread maps don't multiply
+   the footprint) and out-of-core extraction for blocks that don't fit in memory. *Start from:*
+   the uniform grid + accumulator in `coupling.rs::extract_coupling`, and the dense-block
+   harness in `tests/coupling_bench.rs`.
 
 **Working on one of these — or want to?** We're actively pursuing several of these areas
 ourselves, but the open frontier is bigger than any one team, and we'd rather build it in

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use vyges_extract::coupling::extract_coupling;
+use vyges_extract::coupling::{extract_coupling, extract_coupling_capped};
 use vyges_extract::def::{DefNet, Segment};
 use vyges_extract::rules::RcRules;
 
@@ -145,6 +145,43 @@ fn spatial_index_matches_bruteforce_on_dense_layout() {
     for c in &got {
         let w = want.get(&(c.a.clone(), c.b.clone())).expect("pair present in reference");
         assert!((c.cap_ff - w).abs() < 1e-12, "cap mismatch for {}-{}: {} vs {}", c.a, c.b, c.cap_ff, w);
+    }
+}
+
+#[test]
+fn pair_cap_bounds_distinct_pairs() {
+    // 4000 stacked wires -> 3999 adjacent coupling pairs. A tiny cap must bound the
+    // number of distinct pairs held (never OOM on pathological density) while still
+    // returning a valid, non-panicking result — the safety valve, not a crash.
+    let rules = RcRules::parse("met1 0.1 0.05 0.1 0.5\ncouple_cutoff 0.7\n").unwrap();
+    let n = 4000u32;
+    let nets: Vec<DefNet> = (0..n)
+        .map(|i| hnet(&format!("w{i}"), 0.0, 10.0, i as f64 * 0.5))
+        .collect();
+    let capped = extract_coupling_capped(&nets, &rules, &no_widths(), &no_widths(), 10);
+    assert!(capped.len() <= 10, "distinct pairs bounded by the cap, got {}", capped.len());
+    // Every returned pair is a real one (present in the uncapped extraction) — the cap
+    // drops pairs, it never invents or corrupts them.
+    let full = extract_coupling(&nets, &rules, &no_widths(), &no_widths());
+    for c in &capped {
+        let m = full.iter().find(|f| f.a == c.a && f.b == c.b).expect("capped pair is real");
+        assert!((m.cap_ff - c.cap_ff).abs() < 1e-12, "capped pair keeps its full cap value");
+    }
+}
+
+#[test]
+fn generous_cap_matches_uncapped() {
+    // A cap above the pair count is a no-op: identical result to the uncapped path.
+    let rules = RcRules::parse("met1 0.1 0.05 0.1 0.5\ncouple_cutoff 0.7\n").unwrap();
+    let nets: Vec<DefNet> = (0..500u32)
+        .map(|i| hnet(&format!("w{i}"), 0.0, 10.0, i as f64 * 0.5))
+        .collect();
+    let a = extract_coupling(&nets, &rules, &no_widths(), &no_widths());
+    let b = extract_coupling_capped(&nets, &rules, &no_widths(), &no_widths(), usize::MAX);
+    assert_eq!(a.len(), b.len());
+    for (x, y) in a.iter().zip(&b) {
+        assert_eq!((x.a.as_str(), x.b.as_str()), (y.a.as_str(), y.b.as_str()), "same order");
+        assert!((x.cap_ff - y.cap_ff).abs() < 1e-12);
     }
 }
 
