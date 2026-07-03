@@ -149,6 +149,43 @@ fn spatial_index_matches_bruteforce_on_dense_layout() {
 }
 
 #[test]
+fn parallel_result_is_bit_identical_to_serial() {
+    // Band-partitioned parallel aggregation must reproduce the serial sweep exactly —
+    // same pairs, same order, and the *same bits* for each coupling cap (contributions
+    // summed in the same ascending-id order). A dense mesh with many multi-segment nets
+    // so most pairs receive several contributions (where float add-order would bite).
+    let rules = RcRules::parse("met1 0.1 0.05 0.1 0.5\ncouple_cutoff 2.0\n").unwrap();
+    let mut nets: Vec<DefNet> = Vec::new();
+    for i in 0..400u32 {
+        let y = i as f64 * 0.3;
+        // two collinear segments per net -> a neighbour couples to both (multi-contribution)
+        nets.push(DefNet {
+            name: format!("w{i}"),
+            pins: vec![],
+            segments: vec![
+                Segment::wire("met1", 0.0, y, 5.0, y),
+                Segment::wire("met1", 5.0, y, 11.0, y),
+            ],
+            vias: 0,
+        });
+    }
+    let run = |threads: usize| -> Vec<vyges_extract::coupling::CouplingCap> {
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+        pool.install(|| extract_coupling(&nets, &rules, &no_widths(), &no_widths()))
+    };
+    let serial = run(1);
+    for t in [2usize, 8, 16] {
+        let par = run(t);
+        assert_eq!(serial.len(), par.len(), "{t} threads: pair count");
+        for (s, p) in serial.iter().zip(&par) {
+            assert_eq!((s.a.as_str(), s.b.as_str()), (p.a.as_str(), p.b.as_str()), "{t}t order");
+            // bit-identical, not just approximately equal
+            assert_eq!(s.cap_ff.to_bits(), p.cap_ff.to_bits(), "{t}t cap bits {}-{}", s.a, s.b);
+        }
+    }
+}
+
+#[test]
 fn pair_cap_bounds_distinct_pairs() {
     // 4000 stacked wires -> 3999 adjacent coupling pairs. A tiny cap must bound the
     // number of distinct pairs held (never OOM on pathological density) while still
