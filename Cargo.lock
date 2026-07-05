@@ -70,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "vyges-extract"
-version = "0.1.4"
+version = "0.1.6"
 dependencies = [
  "rayon",
  "vyges-layout",
