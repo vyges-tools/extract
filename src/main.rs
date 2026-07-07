@@ -154,6 +154,30 @@ fn demo_couplings() -> Vec<CouplingCap> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    if args.iter().any(|a| a == "--describe") {
+        // Machine-readable description of `run` for tooling that drives it.
+        const DESCRIBE: &str = r#"{
+  "name": "extract",
+  "summary": "foundry-correlated RC parasitic extraction (DEF -> SPEF)",
+  "invocation": {
+    "args_template": ["run", "{job}"],
+    "emits_json": true
+  },
+  "inputs": {
+    "type": "object",
+    "required": ["job"],
+    "properties": {
+      "job": { "type": "string", "description": "path to the extract job file (design, def, rules, corner, temp)" }
+    }
+  },
+  "artifacts": []
+}
+"#;
+        print!("{DESCRIBE}");
+        return;
+    }
+
     let cli = parse_cli(&args);
 
     // Size the rayon thread pool once, before any parallel extraction. Default (flag absent)
