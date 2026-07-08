@@ -79,13 +79,13 @@ dependencies = [
 
 [[package]]
 name = "vyges-geom"
-version = "0.1.0"
-source = "git+https://github.com/vyges-tools/geom?branch=main#7d8ec5d00f84d936d883d0dd6f79b3d43d84730e"
+version = "0.1.10"
+source = "git+https://github.com/vyges-tools/geom?branch=main#02c5f8b0257a41fb678586e71bd3ecf303cd052b"
 
 [[package]]
 name = "vyges-layout"
 version = "0.1.10"
-source = "git+https://github.com/vyges-tools/layout?branch=main#6820e1b93d34d8043762e2dbe859d948385c38b1"
+source = "git+https://github.com/vyges-tools/layout?branch=main#1b4461299061bad8d989d701400b723112bdce8a"
 dependencies = [
  "miniz_oxide",
  "vyges-geom",
