@@ -89,6 +89,24 @@ struct Cli {
 /// RC from the PDK tech LEF for the whole discovered metal stack, and cache it as
 /// `vyges-additions/<pdk>/vyges-extract-rc.rules` next to the PDK's other Vyges
 /// collateral (regenerated on `--refresh`). Returns the cache path.
+/// Raw path of a PDK collateral key from the installed pdk-store — the path is
+/// returned even if the file does not exist (for computing a *write* target such as
+/// a cache directory). Prefers the sibling `vyges-pdk-store`, else PATH.
+fn pdk_store_raw(pdk: &str, key: &str) -> Option<String> {
+    let sibling = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("vyges-pdk-store")))
+        .filter(|p| p.exists())
+        .map(|p| p.to_string_lossy().into_owned());
+    let prog = sibling.unwrap_or_else(|| "vyges-pdk-store".into());
+    let out = std::process::Command::new(prog).args(["resolve", pdk, key]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!s.is_empty()).then_some(s)
+}
+
 fn ensure_rc_rules(cli: &Cli) -> Result<String, String> {
     // tech LEF: explicit flag, else resolved from the PDK adapter.
     let tech_lef = match (&cli.tech_lef, &cli.pdk) {
@@ -96,13 +114,17 @@ fn ensure_rc_rules(cli: &Cli) -> Result<String, String> {
         (None, Some(p)) => vyges_layout::pdk::resolve(p, "tech_lef", None)?,
         (None, None) => return Err("need --pdk NAME or --tech-lef PATH".into()),
     };
-    // cache path: alongside the PDK's `extract_rules` collateral (vyges-additions/).
+    // cache path: alongside the PDK's `extract_rules` collateral (the vyges-additions/
+    // dir). Use a RAW resolve (the file itself need not exist — e.g. a PDK with no LVS
+    // ruleset yet — we only want the directory).
     let cache = match &cli.pdk {
-        Some(p) => {
-            let er = vyges_layout::pdk::resolve(p, "extract_rules", None)?;
-            let dir = std::path::Path::new(&er).parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
-            format!("{dir}/vyges-extract-rc.rules")
-        }
+        Some(p) => match pdk_store_raw(p, "extract_rules") {
+            Some(er) => {
+                let dir = std::path::Path::new(&er).parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+                format!("{dir}/vyges-extract-rc.rules")
+            }
+            None => format!("{tech_lef}.vyges-extract-rc.rules"),
+        },
         None => format!("{tech_lef}.vyges-extract-rc.rules"),
     };
     if std::path::Path::new(&cache).exists() && !cli.refresh {
