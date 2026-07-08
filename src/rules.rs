@@ -178,13 +178,15 @@ impl RcRules {
                 }
             }
         }
+        // Unit calibration (from OpenROAD rcx, extFlow_v2.cpp: `res = getRes()*len`
+        // with `len` in nm): the RESOVER value is ohms-per-nm, so ×1000 gives ohm/µm.
+        // OVER/UNDER capacitances are already per-µm. res is stored directly as ohm/µm
+        // (NOT ohm/square) so no `rsheet` entry — wire_res must not divide by width again.
         let mut layers = BTreeMap::new();
-        let mut rsheet = BTreeMap::new();
         for (&k, &r) in &res {
             if let Some(name) = routing_order.get(k.wrapping_sub(1)) {
                 let c = over.get(&k).copied().unwrap_or(0.0) + under.get(&k).copied().unwrap_or(0.0);
-                layers.insert(name.clone(), LayerRc { res_per_um: r, cap_per_um: c, coupling_per_um: 0.0, s_ref: 0.0 });
-                rsheet.insert(name.clone(), r);
+                layers.insert(name.clone(), LayerRc { res_per_um: r * 1000.0, cap_per_um: c, coupling_per_um: 0.0, s_ref: 0.0 });
             }
         }
         RcRules {
@@ -195,7 +197,7 @@ impl RcRules {
             shield_k: 0.0,
             heights: BTreeMap::new(),
             interlayer: BTreeMap::new(),
-            rsheet,
+            rsheet: BTreeMap::new(),
         }
     }
 
