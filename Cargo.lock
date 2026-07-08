@@ -84,8 +84,8 @@ source = "git+https://github.com/vyges-tools/geom?branch=main#7d8ec5d00f84d936d8
 
 [[package]]
 name = "vyges-layout"
-version = "0.1.4"
-source = "git+https://github.com/vyges-tools/layout?branch=main#6bf1a77a873d9c60473ee2bc561cf9d119beed85"
+version = "0.1.10"
+source = "git+https://github.com/vyges-tools/layout?branch=main#6820e1b93d34d8043762e2dbe859d948385c38b1"
 dependencies = [
  "miniz_oxide",
  "vyges-geom",

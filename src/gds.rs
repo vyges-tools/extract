@@ -131,46 +131,8 @@ impl LayerMap {
     }
 }
 
-// ── union-find ──────────────────────────────────────────────────────────────
 
-struct Uf {
-    p: Vec<usize>,
-}
-impl Uf {
-    fn new(n: usize) -> Uf {
-        Uf { p: (0..n).collect() }
-    }
-    fn find(&mut self, x: usize) -> usize {
-        let mut r = x;
-        while self.p[r] != r {
-            r = self.p[r];
-        }
-        let mut c = x;
-        while self.p[c] != r {
-            let n = self.p[c];
-            self.p[c] = r;
-            c = n;
-        }
-        r
-    }
-    fn union(&mut self, a: usize, b: usize) {
-        let (a, b) = (self.find(a), self.find(b));
-        if a != b {
-            self.p[a] = b;
-        }
-    }
-}
 
-/// Axis-aligned overlap (touching counts — abutting wires are connected).
-fn overlap(a: &Rect, b: &Rect) -> bool {
-    a.x0 <= b.x1 && b.x0 <= a.x1 && a.y0 <= b.y1 && b.y0 <= a.y1
-}
-
-/// A classified shape: a routing rect (with its layer name) or a via rect.
-struct Shape {
-    rect: Rect,
-    layer: Option<String>, // Some(name) = routing; None = via
-}
 
 /// Pull the axis-aligned rectangle for a Boundary/Box/Path element on layer `ld`.
 fn shape_rect(el: &Element) -> Option<(Ld, Rect)> {
@@ -201,81 +163,59 @@ fn rect_to_segment(layer: &str, r: &Rect, scale: f64) -> Segment {
     }
 }
 
-/// Trace a flattened cell's connected wire geometry into `DefNet`s, in microns.
+/// Trace a flattened cell's connected wire geometry into `DefNet`s, in microns —
+/// via the shared `vyges_layout::connect` net tracer (one connectivity kernel with
+/// the device extractor). Routing layers become connective prims; via layers join
+/// them by overlap; per-net segments + via counts build the `DefNet`s the RC core
+/// consumes.
 fn trace_cell(cell: &Cell, map: &LayerMap, dbu_per_um: f64) -> Vec<DefNet> {
-    // 1. classify shapes; collect labels separately.
-    let mut shapes: Vec<Shape> = Vec::new();
-    let mut labels: Vec<(String, i32, i32)> = Vec::new();
+    use vyges_layout::connect::{self, Cut};
+    // gather routing geometry per layer, via geometry, and labels (each element as
+    // its rectangle — matching this front-end's bbox model).
+    let mut by_layer: BTreeMap<(i16, i16), Vec<Vec<(i32, i32)>>> = BTreeMap::new();
+    let mut vias: Vec<Vec<(i32, i32)>> = Vec::new();
+    let mut labels: Vec<(String, i16, i32, i32)> = Vec::new();
     for el in &cell.elements {
         if let Element::Text { layer, texttype, x, y, string } = el {
             if map.is_label((*layer, *texttype)) {
-                labels.push((string.clone(), *x, *y));
+                labels.push((string.clone(), *layer, *x, *y));
             }
             continue;
         }
         if let Some((ld, rect)) = shape_rect(el) {
-            if let Some(name) = map.routing.get(&ld) {
-                shapes.push(Shape { rect, layer: Some(name.clone()) });
+            if map.routing.contains_key(&ld) {
+                by_layer.entry(ld).or_default().push(rect.as_boundary());
             } else if map.is_via(ld) {
-                shapes.push(Shape { rect, layer: None });
+                vias.push(rect.as_boundary());
             }
         }
     }
+    let layers: Vec<((i16, i16), Vec<Vec<(i32, i32)>>)> = by_layer.into_iter().collect();
+    let cuts = vec![Cut::Overlap { cut: vias }];
+    let t = connect::trace(&layers, &cuts, &labels);
 
-    // 2. union-find over shapes.
-    let mut uf = Uf::new(shapes.len());
-    for i in 0..shapes.len() {
-        for j in (i + 1)..shapes.len() {
-            if !overlap(&shapes[i].rect, &shapes[j].rect) {
-                continue;
-            }
-            match (&shapes[i].layer, &shapes[j].layer) {
-                // same-layer routing touch -> connected wire
-                (Some(a), Some(b)) if a == b => uf.union(i, j),
-                // different-layer routing: NOT joined directly (needs a via, below)
-                (Some(_), Some(_)) => {}
-                // a via overlapping any shape pulls them together (contact-gated)
-                _ => uf.union(i, j),
-            }
+    // group routing prims by net -> one DefNet each (per-rect centerline segments).
+    let mut per_net: BTreeMap<usize, Vec<usize>> = BTreeMap::new(); // net -> prim indices
+    for (i, p) in t.prims.iter().enumerate() {
+        if map.routing.contains_key(&p.layer) {
+            per_net.entry(t.net_id[i]).or_default().push(i);
         }
     }
-
-    // 3. group shapes by component root.
-    let mut comps: BTreeMap<usize, (Vec<usize>, usize)> = BTreeMap::new(); // root -> (routing idx, via count)
-    for i in 0..shapes.len() {
-        let r = uf.find(i);
-        let e = comps.entry(r).or_default();
-        if shapes[i].layer.is_some() {
-            e.0.push(i);
-        } else {
-            e.1 += 1;
-        }
-    }
-
-    // 4. emit one DefNet per component that has routing geometry.
     let mut nets: Vec<DefNet> = Vec::new();
     let mut anon = 0usize;
-    for (_root, (routing_idx, via_count)) in comps {
-        if routing_idx.is_empty() {
-            continue; // a via with no routing (shouldn't happen) — skip
-        }
-        let segments: Vec<Segment> = routing_idx
+    for (nid, prim_idx) in per_net {
+        let segments: Vec<Segment> = prim_idx
             .iter()
-            .map(|&i| rect_to_segment(shapes[i].layer.as_ref().unwrap(), &shapes[i].rect, dbu_per_um))
+            .flat_map(|&pi| {
+                let name = map.routing[&t.prims[pi].layer].clone();
+                t.prims[pi].rects.iter().map(move |r| rect_to_segment(&name, r, dbu_per_um)).collect::<Vec<_>>()
+            })
             .collect();
-        // name from a label landing on any of this net's rects
-        let name = labels
-            .iter()
-            .find(|(_, lx, ly)| routing_idx.iter().any(|&i| {
-                let r = &shapes[i].rect;
-                *lx >= r.x0 && *lx <= r.x1 && *ly >= r.y0 && *ly <= r.y1
-            }))
-            .map(|(n, _, _)| n.clone())
-            .unwrap_or_else(|| {
-                anon += 1;
-                format!("gnet_{anon}")
-            });
-        nets.push(DefNet { name, pins: Vec::new(), segments, vias: via_count });
+        let name = t.names[nid].clone().unwrap_or_else(|| {
+            anon += 1;
+            format!("gnet_{anon}")
+        });
+        nets.push(DefNet { name, pins: Vec::new(), segments, vias: t.cut_count[nid] });
     }
     nets.sort_by(|a, b| a.name.cmp(&b.name));
     nets
