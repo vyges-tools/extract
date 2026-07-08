@@ -64,7 +64,7 @@ impl ExtractJob {
         let job = ExtractJob {
             design: get("design")?,
             def: get("def")?,
-            rules: get("rules")?,
+            rules: kv.get("rules").cloned().unwrap_or_default(),
             lef: kv.get("lef").filter(|s| !s.is_empty()).cloned(),
             corner: kv.get("corner").cloned().unwrap_or_else(|| "typical".into()),
             temp: kv.get("temp").and_then(|t| t.parse().ok()).unwrap_or(25.0),
@@ -93,9 +93,10 @@ impl ExtractJob {
         if self.design.is_empty() {
             return Err(JobError("design is required".into()));
         }
-        if self.def.is_empty() || self.rules.is_empty() {
-            return Err(JobError("def and rules are required".into()));
+        if self.def.is_empty() {
+            return Err(JobError("def is required".into()));
         }
+        // `rules` may be empty when derived from a PDK tech LEF (--pdk / --tech-lef).
         Ok(())
     }
 }

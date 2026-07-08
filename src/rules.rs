@@ -92,6 +92,63 @@ fn num(tok: &str, what: &str) -> Result<f64, RulesError> {
 }
 
 impl RcRules {
+    /// Derive per-layer RC from a PDK tech LEF — real `RESISTANCE`/`CAPACITANCE`
+    /// values for **every** `TYPE ROUTING` layer, so the metal stack is discovered
+    /// dynamically (5, 6, 9 … metals) rather than hand-listed. LEF capacitances are
+    /// picofarads; converted to fF/µm. A CUT layer's per-cut `RESISTANCE` feeds the
+    /// lumped via resistance (median across cuts, robust to the diffusion contact).
+    pub fn from_lef(lef: &vyges_loom::lef::Lef) -> RcRules {
+        let mut layers = BTreeMap::new();
+        let mut rsheet = BTreeMap::new();
+        let mut cut_res: Vec<f64> = Vec::new();
+        for (name, l) in &lef.layers {
+            if l.routing {
+                let w = if l.width_um > 0.0 { l.width_um } else { 1.0 };
+                if l.rpersq > 0.0 {
+                    rsheet.insert(name.clone(), l.rpersq);
+                }
+                // cap (fF/µm) = area-cap·width + 2·fringe; LEF caps are pF -> ·1000.
+                let cap_per_um = (l.cpersqdist * w + 2.0 * l.edge_cap) * 1000.0;
+                layers.insert(
+                    name.clone(),
+                    LayerRc { res_per_um: l.rpersq, cap_per_um, coupling_per_um: 0.0, s_ref: 0.0 },
+                );
+            } else if l.cut_res > 0.0 {
+                cut_res.push(l.cut_res);
+            }
+        }
+        cut_res.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let via_res = if cut_res.is_empty() { 0.0 } else { cut_res[cut_res.len() / 2] };
+        RcRules {
+            layers,
+            via_res,
+            couple_cutoff: 2.0,
+            eps_r: 0.0,
+            shield_k: 0.0,
+            heights: BTreeMap::new(),
+            interlayer: BTreeMap::new(),
+            rsheet,
+        }
+    }
+
+    /// Serialise to the RC deck text (so a derived ruleset can be cached as a file).
+    pub fn to_deck(&self) -> String {
+        let mut s = String::from(
+            "# vyges-extract RC rules — DERIVED from the PDK tech LEF; do not hand-edit.\n\
+             # Regenerate with `vyges-extract run <job> --pdk <name> --refresh`.\n\
+             # layer  res(ohm/um)  cap(fF/um)  coupling(fF/um)  s_ref(um)\n",
+        );
+        for (name, l) in &self.layers {
+            s.push_str(&format!("{} {} {} {} {}\n", name, l.res_per_um, l.cap_per_um, l.coupling_per_um, l.s_ref));
+        }
+        s.push_str(&format!("via {}\n", self.via_res));
+        s.push_str(&format!("couple_cutoff {}\n", self.couple_cutoff));
+        for (name, r) in &self.rsheet {
+            s.push_str(&format!("rsheet {} {}\n", name, r));
+        }
+        s
+    }
+
     pub fn parse(text: &str) -> Result<RcRules, RulesError> {
         let mut layers = BTreeMap::new();
         let mut via_res = 0.0;

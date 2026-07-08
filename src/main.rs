@@ -20,11 +20,19 @@ const USAGE: &str = "\
 vyges-extract — foundry-correlated RC parasitic extraction (DEF -> SPEF)
 
 usage:
-  vyges-extract run   JOB [-o OUT] [--json]
-  vyges-extract check JOB
-  vyges-extract demo  [-o OUT] [--json]
+  vyges-extract run    JOB [-o OUT] [--json] [--pdk NAME | --tech-lef PATH] [--refresh]
+  vyges-extract gen-rc (--pdk NAME | --tech-lef PATH) [--refresh]
+  vyges-extract check  JOB
+  vyges-extract demo   [-o OUT] [--json]
+
+RC rules come from a job's `rules:`, or are DERIVED from the PDK tech LEF via
+--pdk / --tech-lef (the metal stack is discovered, not hand-listed) and cached
+as vyges-additions/<pdk>/vyges-extract-rc.rules (regenerate with --refresh).
 
 flags:
+  --pdk NAME       derive RC rules from the PDK tech LEF (resolved via pdk-store)
+  --tech-lef PATH  derive RC rules from this tech LEF directly
+  --refresh        re-derive the cached RC rules
   -o FILE          write output to FILE (default: stdout)
   --json           per-net parasitics summary as JSON instead of SPEF
   -q, --quiet      suppress non-essential output
@@ -69,6 +77,51 @@ struct Cli {
     feature_request: bool,
     sponsor: bool,
     star: bool,
+    pdk: Option<String>,
+    tech_lef: Option<String>,
+    refresh: bool,
+}
+
+/// Resolve the RC ruleset for a `--pdk` (or explicit `--tech-lef`): derive per-layer
+/// RC from the PDK tech LEF for the whole discovered metal stack, and cache it as
+/// `vyges-additions/<pdk>/vyges-extract-rc.rules` next to the PDK's other Vyges
+/// collateral (regenerated on `--refresh`). Returns the cache path.
+fn ensure_rc_rules(cli: &Cli) -> Result<String, String> {
+    // tech LEF: explicit flag, else resolved from the PDK adapter.
+    let tech_lef = match (&cli.tech_lef, &cli.pdk) {
+        (Some(t), _) => t.clone(),
+        (None, Some(p)) => vyges_layout::pdk::resolve(p, "tech_lef", None)?,
+        (None, None) => return Err("need --pdk NAME or --tech-lef PATH".into()),
+    };
+    // cache path: alongside the PDK's `extract_rules` collateral (vyges-additions/).
+    let cache = match &cli.pdk {
+        Some(p) => {
+            let er = vyges_layout::pdk::resolve(p, "extract_rules", None)?;
+            let dir = std::path::Path::new(&er).parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+            format!("{dir}/vyges-extract-rc.rules")
+        }
+        None => format!("{tech_lef}.vyges-extract-rc.rules"),
+    };
+    if std::path::Path::new(&cache).exists() && !cli.refresh {
+        return Ok(cache);
+    }
+    let lef = vyges_loom::lef::Lef::load(&tech_lef).map_err(|e| format!("{tech_lef}: {e}"))?;
+    let rules = vyges_extract::rules::RcRules::from_lef(&lef);
+    // Not every tech LEF carries R/C (some are geometry-only; RC lives in a captable).
+    // The stack is always discovered — warn when the numbers are missing so it's not
+    // silently a zero-parasitic extraction.
+    let no_r: Vec<_> = rules.layers.iter().filter(|(_, l)| l.res_per_um == 0.0).map(|(n, _)| n.as_str()).collect();
+    let no_c: Vec<_> = rules.layers.iter().filter(|(_, l)| l.cap_per_um == 0.0).map(|(n, _)| n.as_str()).collect();
+    if !no_r.is_empty() {
+        eprintln!("warning: tech LEF has no resistance for [{}] — supply a captable or an explicit RC deck", no_r.join(", "));
+    } else if !no_c.is_empty() {
+        eprintln!("warning: tech LEF has no capacitance for [{}] — RC will be resistance-only (supply a captable for cap)", no_c.join(", "));
+    }
+    if let Some(dir) = std::path::Path::new(&cache).parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    std::fs::write(&cache, rules.to_deck()).map_err(|e| format!("{cache}: {e}"))?;
+    Ok(cache)
 }
 
 fn parse_cli(args: &[String]) -> Cli {
@@ -84,6 +137,15 @@ fn parse_cli(args: &[String]) -> Cli {
                 c.threads = args.get(i + 1).and_then(|s| s.parse().ok());
                 i += 1;
             }
+            "--pdk" => {
+                c.pdk = args.get(i + 1).cloned();
+                i += 1;
+            }
+            "--tech-lef" => {
+                c.tech_lef = args.get(i + 1).cloned();
+                i += 1;
+            }
+            "--refresh" => c.refresh = true,
             "--json" => c.json = true,
             "-q" | "--quiet" => c.quiet = true,
             "-v" | "--verbose" => c.verbose = true,
@@ -229,18 +291,56 @@ fn main() {
                 }
             }
         }
+        "gen-rc" => {
+            // derive (+cache) the per-layer RC ruleset from a PDK tech LEF, and print
+            // it — no design/DEF needed. The metal stack is discovered from the LEF.
+            match ensure_rc_rules(&cli) {
+                Ok(p) => {
+                    if !cli.quiet {
+                        eprintln!("wrote {p}");
+                    }
+                    if let Ok(txt) = std::fs::read_to_string(&p) {
+                        print!("{txt}");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    exit(2);
+                }
+            }
+        }
         "run" => {
             let Some(path) = cli.positionals.get(1) else {
                 eprintln!("usage: vyges-extract run JOB [-o OUT]");
                 exit(2);
             };
-            let job = match ExtractJob::load(path) {
+            let mut job = match ExtractJob::load(path) {
                 Ok(j) => j,
                 Err(e) => {
                     eprintln!("error: {e}");
                     exit(2);
                 }
             };
+            // RC rules: explicit job `rules:`, else derived (+cached) from the PDK
+            // tech LEF via --pdk / --tech-lef — the metal stack is discovered, not
+            // hand-listed.
+            if cli.pdk.is_some() || cli.tech_lef.is_some() {
+                match ensure_rc_rules(&cli) {
+                    Ok(p) => {
+                        if cli.verbose {
+                            eprintln!("RC rules (from tech LEF): {p}");
+                        }
+                        job.rules = p;
+                    }
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        exit(2);
+                    }
+                }
+            } else if job.rules.is_empty() {
+                eprintln!("error: job has no `rules:` — pass --pdk NAME or --tech-lef PATH to derive them");
+                exit(2);
+            }
             match engine::extract(&job) {
                 Ok(ex) => {
                     if cli.verbose {
