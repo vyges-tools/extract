@@ -131,6 +131,74 @@ impl RcRules {
         }
     }
 
+    /// Derive lumped per-layer RC from an **OpenRCX captable** (`*.rcx_rules` /
+    /// `rcx_patterns.rules`) — the RC source for PDKs whose tech LEF is geometry-only
+    /// (e.g. asap7). This is a MINIMAL read of the pattern model, not a full parser:
+    /// per metal we take the representative `RESOVER` value as resistance and the
+    /// `OVER` (ground) plus the nearest `UNDER` (immediate upper layer) as the grounded
+    /// capacitance. The captable indexes layers by stack position (`Metal N`), mapped
+    /// to a name via `routing_order` (the LEF stack).
+    pub fn from_captable(routing_order: &[String], rcx: &str) -> RcRules {
+        let (mut res, mut over, mut under): (BTreeMap<usize, f64>, BTreeMap<usize, f64>, BTreeMap<usize, f64>) =
+            Default::default();
+        let mut block: Option<(usize, u8)> = None; // (metal index, 0=res 1=over 2=under)
+        let mut taken = false;
+        for line in rcx.lines() {
+            let t: Vec<&str> = line.split_whitespace().collect();
+            // block header: `Metal <k> RESOVER|OVER|UNDER <ctx>`
+            if t.len() >= 4 && t[0] == "Metal" {
+                if let Ok(k) = t[1].parse::<usize>() {
+                    let kind = match t[2] {
+                        "RESOVER" => Some(0u8),
+                        "OVER" => Some(1u8),
+                        "UNDER" => Some(2u8),
+                        _ => None,
+                    };
+                    block = match kind {
+                        // RESOVER/OVER: only the base `0` context; UNDER: the first
+                        // (nearest-upper) block for this metal.
+                        Some(kd) if (kd != 2 && t[3] == "0") || (kd == 2 && !under.contains_key(&k)) => Some((k, kd)),
+                        _ => None,
+                    };
+                    taken = false;
+                    continue;
+                }
+            }
+            // first 4-column data row of the active block: the value is the last column.
+            if let Some((k, kd)) = block {
+                if !taken && t.len() == 4 {
+                    if let Ok(v) = t[3].parse::<f64>() {
+                        match kd {
+                            0 => drop(res.entry(k).or_insert(v)),
+                            1 => drop(over.entry(k).or_insert(v)),
+                            _ => drop(under.entry(k).or_insert(v)),
+                        }
+                        taken = true;
+                    }
+                }
+            }
+        }
+        let mut layers = BTreeMap::new();
+        let mut rsheet = BTreeMap::new();
+        for (&k, &r) in &res {
+            if let Some(name) = routing_order.get(k.wrapping_sub(1)) {
+                let c = over.get(&k).copied().unwrap_or(0.0) + under.get(&k).copied().unwrap_or(0.0);
+                layers.insert(name.clone(), LayerRc { res_per_um: r, cap_per_um: c, coupling_per_um: 0.0, s_ref: 0.0 });
+                rsheet.insert(name.clone(), r);
+            }
+        }
+        RcRules {
+            layers,
+            via_res: 0.0,
+            couple_cutoff: 2.0,
+            eps_r: 0.0,
+            shield_k: 0.0,
+            heights: BTreeMap::new(),
+            interlayer: BTreeMap::new(),
+            rsheet,
+        }
+    }
+
     /// Serialise to the RC deck text (so a derived ruleset can be cached as a file).
     pub fn to_deck(&self) -> String {
         let mut s = String::from(

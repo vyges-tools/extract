@@ -27,11 +27,13 @@ usage:
 
 RC rules come from a job's `rules:`, or are DERIVED from the PDK tech LEF via
 --pdk / --tech-lef (the metal stack is discovered, not hand-listed) and cached
-as vyges-additions/<pdk>/vyges-extract-rc.rules (regenerate with --refresh).
+as vyges-additions/<pdk>/vyges-extract-rc.rules (regenerate with --refresh). When
+a tech LEF is geometry-only (no R/C), an OpenRCX captable supplies the numbers.
 
 flags:
   --pdk NAME       derive RC rules from the PDK tech LEF (resolved via pdk-store)
   --tech-lef PATH  derive RC rules from this tech LEF directly
+  --captable PATH  OpenRCX rules file for R/C the LEF lacks (else pdk-store captable)
   --refresh        re-derive the cached RC rules
   -o FILE          write output to FILE (default: stdout)
   --json           per-net parasitics summary as JSON instead of SPEF
@@ -79,6 +81,7 @@ struct Cli {
     star: bool,
     pdk: Option<String>,
     tech_lef: Option<String>,
+    captable: Option<String>,
     refresh: bool,
 }
 
@@ -106,16 +109,44 @@ fn ensure_rc_rules(cli: &Cli) -> Result<String, String> {
         return Ok(cache);
     }
     let lef = vyges_loom::lef::Lef::load(&tech_lef).map_err(|e| format!("{tech_lef}: {e}"))?;
-    let rules = vyges_extract::rules::RcRules::from_lef(&lef);
-    // Not every tech LEF carries R/C (some are geometry-only; RC lives in a captable).
-    // The stack is always discovered — warn when the numbers are missing so it's not
-    // silently a zero-parasitic extraction.
+    let mut rules = vyges_extract::rules::RcRules::from_lef(&lef);
+    // Not every tech LEF carries R/C (some are geometry-only; RC lives in an OpenRCX
+    // captable). Fill any missing R/C from a captable — explicit `--captable`, else the
+    // PDK's `captable` collateral — mapping the captable's `Metal N` via the LEF stack.
+    let captable = cli
+        .captable
+        .clone()
+        .or_else(|| cli.pdk.as_deref().and_then(|p| vyges_layout::pdk::resolve(p, "captable", None).ok()));
+    let incomplete = |r: &vyges_extract::rules::RcRules| r.layers.values().any(|l| l.res_per_um == 0.0 || l.cap_per_um == 0.0);
+    if incomplete(&rules) {
+        if let Some(cap) = &captable {
+            if let Ok(rcx) = std::fs::read_to_string(cap) {
+                let cr = vyges_extract::rules::RcRules::from_captable(&lef.routing_order, &rcx);
+                for (n, cl) in &cr.layers {
+                    let e = rules.layers.entry(n.clone()).or_insert_with(|| cl.clone());
+                    if e.res_per_um == 0.0 {
+                        e.res_per_um = cl.res_per_um;
+                    }
+                    if e.cap_per_um == 0.0 {
+                        e.cap_per_um = cl.cap_per_um;
+                    }
+                }
+                for (n, r) in &cr.rsheet {
+                    rules.rsheet.entry(n.clone()).or_insert(*r);
+                }
+                if rules.via_res == 0.0 {
+                    rules.via_res = cr.via_res;
+                }
+            }
+        }
+    }
+    // Warn if R/C are still missing (no captable, or it didn't cover a layer).
     let no_r: Vec<_> = rules.layers.iter().filter(|(_, l)| l.res_per_um == 0.0).map(|(n, _)| n.as_str()).collect();
     let no_c: Vec<_> = rules.layers.iter().filter(|(_, l)| l.cap_per_um == 0.0).map(|(n, _)| n.as_str()).collect();
     if !no_r.is_empty() {
-        eprintln!("warning: tech LEF has no resistance for [{}] — supply a captable or an explicit RC deck", no_r.join(", "));
+        eprintln!("warning: no resistance for [{}] — tech LEF is geometry-only; pass --captable <rcx_rules>", no_r.join(", "));
     } else if !no_c.is_empty() {
-        eprintln!("warning: tech LEF has no capacitance for [{}] — RC will be resistance-only (supply a captable for cap)", no_c.join(", "));
+        eprintln!("warning: no capacitance for [{}] — RC is resistance-only; pass --captable for cap", no_c.join(", "));
     }
     if let Some(dir) = std::path::Path::new(&cache).parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -143,6 +174,10 @@ fn parse_cli(args: &[String]) -> Cli {
             }
             "--tech-lef" => {
                 c.tech_lef = args.get(i + 1).cloned();
+                i += 1;
+            }
+            "--captable" => {
+                c.captable = args.get(i + 1).cloned();
                 i += 1;
             }
             "--refresh" => c.refresh = true,
