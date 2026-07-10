@@ -40,6 +40,7 @@ flags:
   -q, --quiet      suppress non-essential output
   -v, --verbose    extra detail on stderr
   -j, --threads N  parallel worker threads (default: all cores; 1 = serial)
+  --describe       print a machine-readable JSON description of the command
   -h, --help       show this help
   -V, --version    show version
   --bug-report     file a bug (central: vyges/community)
