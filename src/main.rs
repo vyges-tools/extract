@@ -290,7 +290,7 @@ fn main() {
       "job": { "type": "string", "description": "path to the extract job file (design, def, rules, corner, temp)" }
     }
   },
-  "artifacts": []
+  "artifacts": [ { "role": "spef" } ]
 }
 "#;
         print!("{DESCRIBE}");
