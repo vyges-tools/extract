@@ -272,6 +272,41 @@ fn demo_couplings() -> Vec<CouplingCap> {
     vec![CouplingCap { a: "clk".into(), b: "n0".into(), cap_ff: 0.42 }]
 }
 
+/// Emit the vyges-events causal trail for an extraction result on STDERR (never
+/// stdout — that carries the SPEF / JSON report). Extraction produces data, not
+/// violations, so the headline is a completion summary (EXTRACT-DONE); any net
+/// the extractor could not resolve to a real connection (fewer than two pins) is
+/// surfaced as an EXTRACT-UNCONNECTED warning so downstream tooling can react.
+fn emit_extract_events(nets: &[NetParasitics], couplings: &[CouplingCap]) {
+    use vyges_events::{Event, Severity};
+    let e = |sev, code: &str, msg: String, objs: Vec<String>| {
+        vyges_events::emit(&Event::new("vyges-extract", sev, msg).with_code(code).with_objects(objs));
+    };
+    for n in nets {
+        if n.pins.len() < 2 {
+            e(
+                Severity::Warn,
+                "EXTRACT-UNCONNECTED",
+                format!("net '{}' has {} pin(s) — no complete connection to extract", n.name, n.pins.len()),
+                vec![format!("net:{}", n.name)],
+            );
+        }
+    }
+    let total_cap_ff: f64 = nets.iter().map(|n| n.cap_ff).sum::<f64>()
+        + couplings.iter().map(|c| c.cap_ff).sum::<f64>();
+    e(
+        Severity::Info,
+        "EXTRACT-DONE",
+        format!(
+            "extracted {} net(s), {} coupling pair(s) ({:.2} fF total capacitance)",
+            nets.len(),
+            couplings.len(),
+            total_cap_ff
+        ),
+        vec![],
+    );
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
@@ -332,7 +367,9 @@ fn main() {
 
     match cmd.as_str() {
         "demo" => {
-            write_out(&render("vyges_extract_demo", &demo_nets(), &[], &demo_couplings(), &cli), &cli)
+            let (nets, couplings) = (demo_nets(), demo_couplings());
+            emit_extract_events(&nets, &couplings);
+            write_out(&render("vyges_extract_demo", &nets, &[], &couplings, &cli), &cli)
         }
         "check" => {
             let Some(path) = cli.positionals.get(1) else {
@@ -410,6 +447,7 @@ fn main() {
                             job.def
                         );
                     }
+                    emit_extract_events(&ex.nets, &ex.couplings);
                     write_out(&render(&job.design, &ex.nets, &ex.trees, &ex.couplings, &cli), &cli);
                 }
                 Err(e) => {

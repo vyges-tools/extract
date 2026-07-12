@@ -17,6 +17,9 @@ repository = "https://github.com/vyges-tools/extract"
 vyges-loom = { git = "https://github.com/vyges-tools/loom", branch = "main" }
 vyges-layout = { git = "https://github.com/vyges-tools/layout", branch = "main" }
 rayon = "1"
+# Structured events (vyges-events/1.0) for the MCP causal trail. Core-only (no tracing
+# backend) — the events go to stderr; stdout stays reserved for the SPEF/report.
+vyges-events = { git = "https://github.com/vyges-tools/events", branch = "main", default-features = false }
 
 [[bin]]
 name = "vyges-extract"
