@@ -25,6 +25,7 @@ usage:
   vyges-extract check  JOB
   vyges-extract demo   [-o OUT] [--json]
   vyges-extract klayout2spef --gds F --layermap M [--top CELL] [-o OUT] [--geom-out G]
+                             [--def D --cell-lef CL --lib LIB]
                              [--runner podman [--image REF] [--mount DIR] | --python CMD]
                              [--routing-only] [--from-dump F] [--self-test]
 
@@ -106,6 +107,9 @@ struct Cli {
     mount: Option<String>,
     driver: Option<String>,
     date: Option<String>,
+    def: Option<String>,
+    cell_lef: Option<String>,
+    lib: Option<String>,
 }
 
 /// Resolve the RC ruleset for a `--pdk` (or explicit `--tech-lef`): derive per-layer
@@ -239,6 +243,9 @@ fn parse_cli(args: &[String]) -> Cli {
             "--mount" => { c.mount = args.get(i + 1).cloned(); i += 1; }
             "--driver" => { c.driver = args.get(i + 1).cloned(); i += 1; }
             "--date" => { c.date = args.get(i + 1).cloned(); i += 1; }
+            "--def" => { c.def = args.get(i + 1).cloned(); i += 1; }
+            "--cell-lef" => { c.cell_lef = args.get(i + 1).cloned(); i += 1; }
+            "--lib" => { c.lib = args.get(i + 1).cloned(); i += 1; }
             "--json" => c.json = true,
             "-q" | "--quiet" => c.quiet = true,
             "-v" | "--verbose" => c.verbose = true,
@@ -580,6 +587,9 @@ fn klayout2spef(cli: &Cli) {
         driver: cli.driver.clone(),
         version: vyges_extract::VERSION.to_string(),
         date: cli.date.clone(),
+        def: cli.def.clone(),
+        cell_lef: cli.cell_lef.clone(),
+        lib: cli.lib.clone(),
     };
 
     match klf::run(&opts, dump) {
@@ -623,8 +633,8 @@ fn emit_klayout_events(res: &vyges_extract::klayout::KlResult) {
             "vyges-extract",
             Severity::Info,
             format!(
-                "KLayout→SPEF: {} net(s), {} metal segment(s), {:.2} fF total; EM geom sidecar emitted",
-                res.n_nets, res.n_segs, res.total_cap_ff
+                "KLayout→SPEF: {} net(s), {} metal segment(s), {} pin(s) hooked, {:.2} fF total; EM geom sidecar emitted",
+                res.n_nets, res.n_segs, res.n_pins, res.total_cap_ff
             ),
         )
         .with_code("KLAYOUT-EXTRACT-DONE"),

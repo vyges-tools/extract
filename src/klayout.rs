@@ -8,11 +8,15 @@
 //! An offline `self_test` (and a `--from-dump` path) exercise the whole
 //! parse→write→re-read pipeline without KLayout, so CI stays hermetic.
 
+use std::collections::HashMap;
 use std::process::Command;
 
+use vyges_loom::def::Def;
 use vyges_loom::emgeom::EmGeom;
 use vyges_loom::klayout as kl;
-use vyges_loom::spef::{Spef, WriteOpts};
+use vyges_loom::lef::{Lef, PinDir};
+use vyges_loom::liberty::{Dir as LibDir, Lib};
+use vyges_loom::spef::{PinConn, Spef, WriteOpts};
 
 /// The embedded driver — written to a temp path when the caller doesn't point at
 /// one on disk, so the tool is self-contained.
@@ -33,6 +37,12 @@ pub struct KlOpts {
     pub driver: Option<String>,
     pub version: String,
     pub date: Option<String>,
+    /// Std-cell pin/device hookup sources (optional). DEF supplies placement +
+    /// net→(instance,pin); cell LEF supplies pin DIRECTION; liberty supplies
+    /// per-load input capacitance. When absent, SPEF carries wire RC only.
+    pub def: Option<String>,
+    pub cell_lef: Option<String>,
+    pub lib: Option<String>,
 }
 
 pub struct KlResult {
@@ -40,7 +50,82 @@ pub struct KlResult {
     pub geom: String,
     pub n_nets: usize,
     pub n_segs: usize,
+    pub n_pins: usize,
     pub total_cap_ff: f64,
+}
+
+fn lib_dir_to_pin(d: LibDir) -> PinDir {
+    match d {
+        LibDir::In => PinDir::Input,
+        LibDir::Out => PinDir::Output,
+        LibDir::Inout => PinDir::Inout,
+        LibDir::Other => PinDir::Unknown,
+    }
+}
+
+/// Attach std-cell pin/device hookup to an RC-only Spef: for each DEF net, add a
+/// `*CONN` entry per (instance,pin) with direction (cell LEF MACRO, else liberty)
+/// and, for loads, the liberty input capacitance — added to the net's total cap.
+/// Returns the number of pins hooked up. Net names must match between the SPEF
+/// (KLayout labels) and the DEF.
+pub fn attach_hookup(spef: &mut Spef, def: &Def, cell_lef: Option<&Lef>, lib: Option<&Lib>) -> usize {
+    let inst_cell: HashMap<&str, &str> =
+        def.comps.iter().map(|c| (c.name.as_str(), c.cell.as_str())).collect();
+    let mut hooked = 0;
+    for dnet in &def.nets {
+        let Some(rc) = spef.nets.get_mut(&dnet.name) else { continue };
+        rc.conns.clear();
+        let mut cin_sum = 0.0;
+        for (inst, pin) in &dnet.pins {
+            let cell = inst_cell.get(inst.as_str()).copied();
+            // direction: cell LEF MACRO first, then liberty as a fallback
+            let mut dir = cell
+                .and_then(|c| cell_lef.map(|l| l.pin_dir(c, pin)))
+                .unwrap_or(PinDir::Unknown);
+            if dir == PinDir::Unknown {
+                if let Some(d) = cell
+                    .and_then(|c| lib.and_then(|lb| lb.cell(c)))
+                    .and_then(|cc| cc.pins.get(pin))
+                    .map(|p| lib_dir_to_pin(p.direction))
+                {
+                    dir = d;
+                }
+            }
+            // per-load Cin from liberty (Farads → fF) for input/inout pins
+            let cap_ff = if matches!(dir, PinDir::Input | PinDir::Inout) {
+                cell.and_then(|c| lib.and_then(|lb| lb.cell(c)))
+                    .map(|cc| cc.input_cap(pin) * 1e15)
+                    .unwrap_or(0.0)
+            } else {
+                0.0
+            };
+            cin_sum += cap_ff;
+            rc.conns.push(PinConn {
+                inst: inst.clone(),
+                pin: pin.clone(),
+                node: format!("{inst}:{pin}"),
+                dir,
+                cap_ff,
+            });
+            hooked += 1;
+        }
+        rc.cap_ff += cin_sum; // net cap now includes the load pin caps
+    }
+    hooked
+}
+
+fn render(spef: &Spef, geom: &EmGeom, design: &str, version: &str, date: Option<String>) -> KlResult {
+    let n_nets = spef.nets.len();
+    let n_segs = geom.segs.len();
+    let n_pins = spef.nets.values().map(|n| n.conns.len()).sum();
+    let total_cap_ff = spef.nets.values().map(|n| n.cap_ff).sum();
+    let opts = WriteOpts {
+        design: design.to_string(),
+        program: "vyges-extract".into(),
+        version: version.to_string(),
+        date,
+    };
+    KlResult { spef: spef.to_spef(&opts), geom: geom.to_text(), n_nets, n_segs, n_pins, total_cap_ff }
 }
 
 /// Resolve the driver path: the caller's `--driver`, else materialize the embedded
@@ -97,37 +182,40 @@ pub fn run_driver(opts: &KlOpts) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Convert a net-dump into rendered SPEF + geom sidecar text.
+/// Convert a net-dump into rendered SPEF + geom sidecar text (no pin hookup).
 pub fn convert(dump: &str, design: &str, version: &str, date: Option<String>) -> KlResult {
     let (spef, mut geom): (Spef, EmGeom) = kl::parse(dump);
     if geom.design.is_empty() {
         geom.design = design.to_string();
     }
-    let n_nets = spef.nets.len();
-    let n_segs = geom.segs.len();
-    let total_cap_ff = spef.nets.values().map(|n| n.cap_ff).sum();
-    let opts = WriteOpts {
-        design: design.to_string(),
-        program: "vyges-extract".into(),
-        version: version.to_string(),
-        date,
-    };
-    KlResult {
-        spef: spef.to_spef(&opts),
-        geom: geom.to_text(),
-        n_nets,
-        n_segs,
-        total_cap_ff,
-    }
+    render(&spef, &geom, design, version, date)
 }
 
-/// End-to-end: run KLayout (unless `dump` is supplied) → SPEF + geom.
+/// End-to-end: run KLayout (unless `dump` is supplied) → optional DEF/LEF/liberty
+/// pin hookup → SPEF + geom.
 pub fn run(opts: &KlOpts, dump: Option<String>) -> Result<KlResult, String> {
     let text = match dump {
         Some(d) => d,
         None => run_driver(opts)?,
     };
-    Ok(convert(&text, if opts.design.is_empty() { "top" } else { &opts.design }, &opts.version, opts.date.clone()))
+    let design = if opts.design.is_empty() { "top" } else { &opts.design };
+    let (mut spef, mut geom): (Spef, EmGeom) = kl::parse(&text);
+    if geom.design.is_empty() {
+        geom.design = design.to_string();
+    }
+    if let Some(def_path) = &opts.def {
+        let def = Def::load(def_path).map_err(|e| format!("{def_path}: {e}"))?;
+        let cell_lef = match &opts.cell_lef {
+            Some(p) => Some(Lef::load(p).map_err(|e| format!("{p}: {e}"))?),
+            None => None,
+        };
+        let lib = match &opts.lib {
+            Some(p) => Some(Lib::load(p).map_err(|e| format!("{p}: {e}"))?),
+            None => None,
+        };
+        attach_hookup(&mut spef, &def, cell_lef.as_ref(), lib.as_ref());
+    }
+    Ok(render(&spef, &geom, design, &opts.version, opts.date.clone()))
 }
 
 /// Offline pipeline check — no KLayout. Builds a synthetic net-dump, runs it
@@ -194,5 +282,40 @@ mod tests {
         assert!(r.spef.contains("*D_NET"));
         // geom sidecar line: SEG <net> <a> <b> <layer> <w> <l> <res>
         assert!(r.geom.contains("SEG n0 n0 n0^met1 met1 0.1 5 100"), "geom was:\n{}", r.geom);
+    }
+
+    #[test]
+    fn hookup_marks_driver_load_and_cin() {
+        // RC-only Spef from KLayout
+        let (mut spef, _) = kl::parse("DESIGN t\nNET clk 2.0\nSEG clk clk^met1 100 met1 0.14 5\nGCAP clk 2.0\n");
+        let def = Def::parse(
+            "VERSION 5.8 ;\nDESIGN t ;\nUNITS DISTANCE MICRONS 1000 ;\n\
+             COMPONENTS 2 ;\n- u1 INV_X1 + PLACED ( 0 0 ) N ;\n- u2 INV_X1 + PLACED ( 1000 0 ) N ;\nEND COMPONENTS\n\
+             NETS 1 ;\n- clk ( u1 Y ) ( u2 A ) ;\nEND NETS\nEND DESIGN\n",
+        )
+        .unwrap();
+        let cell_lef = Lef::parse(
+            "MACRO INV_X1\n PIN A\n  DIRECTION INPUT ;\n END A\n PIN Y\n  DIRECTION OUTPUT ;\n END Y\nEND INV_X1\n",
+        )
+        .unwrap();
+        let lib = Lib::parse(
+            "library(t) {\n  capacitive_load_unit (1, ff);\n  cell (INV_X1) {\n    pin(A) { direction: input; capacitance: 1.2; }\n    pin(Y) { direction: output; }\n  }\n}\n",
+        )
+        .unwrap();
+
+        let hooked = attach_hookup(&mut spef, &def, Some(&cell_lef), Some(&lib));
+        assert_eq!(hooked, 2);
+        let rc = spef.nets.get("clk").unwrap();
+        let y = rc.conns.iter().find(|c| c.pin == "Y").unwrap();
+        let a = rc.conns.iter().find(|c| c.pin == "A").unwrap();
+        assert_eq!(y.dir, PinDir::Output);
+        assert_eq!(a.dir, PinDir::Input);
+        assert!((a.cap_ff - 1.2).abs() < 1e-6, "Cin was {}", a.cap_ff);
+        assert!((rc.cap_ff - 3.2).abs() < 1e-6, "net cap should be 2.0 + 1.2 Cin, was {}", rc.cap_ff);
+
+        // and it renders standard *CONN with O/I + *L
+        let out = render(&spef, &vyges_loom::emgeom::EmGeom::default(), "t", "0", None);
+        assert!(out.spef.contains(" O\n") && out.spef.contains(" I *L 1.2"), "spef:\n{}", out.spef);
+        assert_eq!(out.n_pins, 2);
     }
 }
