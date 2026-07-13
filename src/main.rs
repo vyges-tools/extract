@@ -24,6 +24,14 @@ usage:
   vyges-extract gen-rc (--pdk NAME | --tech-lef PATH) [--refresh]
   vyges-extract check  JOB
   vyges-extract demo   [-o OUT] [--json]
+  vyges-extract klayout2spef --gds F --layermap M [--top CELL] [-o OUT] [--geom-out G]
+                             [--runner podman [--image REF] [--mount DIR] | --python CMD]
+                             [--routing-only] [--from-dump F] [--self-test]
+
+klayout2spef drives a headless KLayout (LayoutToNetlist) over a GDS to write SPEF +
+an EM geometry sidecar (per-segment layer/width/length) for current-density sign-off.
+--runner podman wraps the driver in the vyges-klayout container; --self-test and
+--from-dump run the parse→SPEF pipeline offline (no KLayout).
 
 RC rules come from a job's `rules:`, or are DERIVED from the PDK tech LEF via
 --pdk / --tech-lef (the metal stack is discovered, not hand-listed) and cached
@@ -84,6 +92,20 @@ struct Cli {
     tech_lef: Option<String>,
     captable: Option<String>,
     refresh: bool,
+    // klayout2spef front end
+    gds: Option<String>,
+    top: Option<String>,
+    layermap: Option<String>,
+    routing_only: bool,
+    geom_out: Option<String>,
+    from_dump: Option<String>,
+    self_test: bool,
+    python: Option<String>,
+    runner: Option<String>,
+    image: Option<String>,
+    mount: Option<String>,
+    driver: Option<String>,
+    date: Option<String>,
 }
 
 /// Resolve the RC ruleset for a `--pdk` (or explicit `--tech-lef`): derive per-layer
@@ -204,6 +226,19 @@ fn parse_cli(args: &[String]) -> Cli {
                 i += 1;
             }
             "--refresh" => c.refresh = true,
+            "--gds" => { c.gds = args.get(i + 1).cloned(); i += 1; }
+            "--top" => { c.top = args.get(i + 1).cloned(); i += 1; }
+            "--layermap" => { c.layermap = args.get(i + 1).cloned(); i += 1; }
+            "--routing-only" => c.routing_only = true,
+            "--geom-out" => { c.geom_out = args.get(i + 1).cloned(); i += 1; }
+            "--from-dump" => { c.from_dump = args.get(i + 1).cloned(); i += 1; }
+            "--self-test" => c.self_test = true,
+            "--python" => { c.python = args.get(i + 1).cloned(); i += 1; }
+            "--runner" => { c.runner = args.get(i + 1).cloned(); i += 1; }
+            "--image" => { c.image = args.get(i + 1).cloned(); i += 1; }
+            "--mount" => { c.mount = args.get(i + 1).cloned(); i += 1; }
+            "--driver" => { c.driver = args.get(i + 1).cloned(); i += 1; }
+            "--date" => { c.date = args.get(i + 1).cloned(); i += 1; }
             "--json" => c.json = true,
             "-q" | "--quiet" => c.quiet = true,
             "-v" | "--verbose" => c.verbose = true,
@@ -456,10 +491,142 @@ fn main() {
                 }
             }
         }
+        "klayout2spef" => klayout2spef(&cli),
         other => {
             eprintln!("vyges-extract: unknown command {other:?}\n");
             print!("{USAGE}");
             exit(2);
         }
     }
+}
+
+/// `klayout2spef` — extract SPEF (+ EM geom sidecar) from a GDS via headless
+/// KLayout. Runs the driver (or `--from-dump` / `--self-test` offline), then
+/// writes SPEF and the sidecar and emits the vyges-events trail.
+fn klayout2spef(cli: &Cli) {
+    use vyges_extract::klayout::{self as klf, KlOpts};
+
+    if cli.self_test {
+        match klf::self_test() {
+            Ok(s) => {
+                println!("{s}");
+                return;
+            }
+            Err(e) => {
+                eprintln!("self-test FAILED: {e}");
+                exit(1);
+            }
+        }
+    }
+
+    // Build the python invocation. A container runner is just a prefix that mounts
+    // a directory into the image and runs its `python3` (KLayout pymod on PATH).
+    let python: Option<String> = if let Some(runner) = &cli.runner {
+        let image = cli.image.clone().unwrap_or_else(|| {
+            "ghcr.io/vyges-tools/vyges-klayout:0.30.9".to_string()
+        });
+        let mount = cli.mount.clone().unwrap_or_else(|| {
+            // default: the GDS's directory (absolute), where the driver is staged
+            cli.gds
+                .as_deref()
+                .and_then(|g| std::path::Path::new(g).parent())
+                .and_then(|p| std::fs::canonicalize(p).ok())
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| ".".into())
+        });
+        Some(format!(
+            "{runner} run --rm --userns=keep-id -v {mount}:{mount} -w {mount} {image} python3"
+        ))
+    } else {
+        cli.python.clone()
+    };
+
+    let dump = match &cli.from_dump {
+        Some(p) => match std::fs::read_to_string(p) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                eprintln!("error: {p}: {e}");
+                exit(2);
+            }
+        },
+        None => {
+            // driving KLayout: gds + layermap are required
+            if cli.gds.is_none() || cli.layermap.is_none() {
+                eprintln!("usage: vyges-extract klayout2spef --gds FILE --layermap FILE [--top CELL] [-o OUT]\n       (or --from-dump FILE, or --self-test)");
+                exit(2);
+            }
+            None
+        }
+    };
+
+    let design = cli
+        .top
+        .clone()
+        .or_else(|| cli.gds.as_deref().map(|g| {
+            std::path::Path::new(g)
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "top".into())
+        }))
+        .unwrap_or_else(|| "top".into());
+
+    let opts = KlOpts {
+        gds: cli.gds.clone().unwrap_or_default(),
+        top: cli.top.clone().unwrap_or_default(),
+        layermap: cli.layermap.clone().unwrap_or_default(),
+        design,
+        routing_only: cli.routing_only,
+        python: python.map(|s| s.split_whitespace().map(String::from).collect()).unwrap_or_default(),
+        driver: cli.driver.clone(),
+        version: vyges_extract::VERSION.to_string(),
+        date: cli.date.clone(),
+    };
+
+    match klf::run(&opts, dump) {
+        Ok(res) => {
+            emit_klayout_events(&res);
+            write_out(&res.spef, cli);
+            // geom sidecar: --geom-out, else alongside -o (or stderr note for stdout)
+            let geom_path = cli.geom_out.clone().or_else(|| {
+                cli.out.as_ref().map(|o| {
+                    let p = std::path::Path::new(o);
+                    let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "out".into());
+                    p.with_file_name(format!("{stem}.emgeom")).to_string_lossy().into_owned()
+                })
+            });
+            match geom_path {
+                Some(gp) => match std::fs::write(&gp, &res.geom) {
+                    Ok(_) => { if !cli.quiet { println!("wrote {gp}"); } }
+                    Err(e) => { eprintln!("error: {gp}: {e}"); exit(1); }
+                },
+                None => eprintln!("note: EM geom sidecar not written (stdout SPEF); pass --geom-out FILE"),
+            }
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            exit(1);
+        }
+    }
+}
+
+/// vyges-events trail for a KLayout extraction (STDERR — stdout carries SPEF).
+fn emit_klayout_events(res: &vyges_extract::klayout::KlResult) {
+    use vyges_events::{Event, Severity};
+    if res.n_nets == 0 {
+        vyges_events::emit(
+            &Event::new("vyges-extract", Severity::Warn, "KLayout extraction produced 0 nets — check --top / --layermap".to_string())
+                .with_code("KLAYOUT-EXTRACT-EMPTY"),
+        );
+    }
+    vyges_events::emit(
+        &Event::new(
+            "vyges-extract",
+            Severity::Info,
+            format!(
+                "KLayout→SPEF: {} net(s), {} metal segment(s), {:.2} fF total; EM geom sidecar emitted",
+                res.n_nets, res.n_segs, res.total_cap_ff
+            ),
+        )
+        .with_code("KLAYOUT-EXTRACT-DONE"),
+    );
 }

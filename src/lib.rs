@@ -30,6 +30,9 @@ pub mod tree;
 pub mod coupling;
 pub mod spef;
 pub mod engine;
+/// KLayout → SPEF front end: drive a headless-KLayout GDS net/geometry dumper and
+/// render SPEF + the loom EM geometry sidecar. Parsing/serialization live in loom.
+pub mod klayout;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const COPYRIGHT: &str = "© 2026 Vyges. All Rights Reserved.  https://vyges.com";
