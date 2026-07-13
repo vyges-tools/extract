@@ -120,5 +120,6 @@ pub fn run_to_spef(job: &ExtractJob) -> Result<String, ExtractError> {
         &ex.nets,
         &ex.trees,
         &ex.couplings,
+        None,
     ))
 }

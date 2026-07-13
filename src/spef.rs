@@ -114,7 +114,7 @@ pub fn render(
     couplings: &[CouplingCap],
 ) -> String {
     let none: Vec<Option<RcNetwork>> = (0..nets.len()).map(|_| None).collect();
-    render_distributed(design, units, date, nets, &none, couplings)
+    render_distributed(design, units, date, nets, &none, couplings, None)
 }
 
 /// Render a complete SPEF, emitting each net as a **distributed RC tree** when
@@ -136,6 +136,7 @@ pub fn render_distributed(
     nets: &[NetParasitics],
     trees: &[Option<RcNetwork>],
     couplings: &[CouplingCap],
+    resolver: Option<&crate::hookup::PinResolver>,
 ) -> String {
     // Name map: all net names first (so net ids are contiguous 1..N and coupling
     // references stay readable), then instance names.
@@ -198,13 +199,31 @@ pub fn render_distributed(
     for (n, net) in nets.iter().enumerate() {
         let nid = net_ids[n];
         let cpl = coupling_total.get(&net.name).copied().unwrap_or(0.0);
-        // total net cap = grounded + all coupling involving this net
-        s.push_str(&format!("*D_NET *{} {}\n", nid, val(net.cap_ff + cpl)));
+        // std-cell hookup: per-pin (direction, load cap) from DEF+LEF+liberty.
+        let hk: Vec<(vyges_loom::lef::PinDir, f64)> = net
+            .pins
+            .iter()
+            .map(|(inst, pin)| {
+                resolver.map(|r| r.resolve(inst, pin)).unwrap_or((vyges_loom::lef::PinDir::Unknown, 0.0))
+            })
+            .collect();
+        let cin_sum: f64 = hk.iter().map(|(_, c)| *c).sum();
+        // total net cap = grounded wire + coupling + per-load pin Cin
+        s.push_str(&format!("*D_NET *{} {}\n", nid, val(net.cap_ff + cpl + cin_sum)));
 
         s.push_str("*CONN\n");
-        for (iid, pin) in &pin_ids[n] {
-            // direction unknown without LEF in v0 -> default 'I'
-            s.push_str(&format!("*I *{iid}:{pin} I\n"));
+        for (k, (iid, pin)) in pin_ids[n].iter().enumerate() {
+            let (dir, cap) = hk[k];
+            let d = match dir {
+                vyges_loom::lef::PinDir::Output => "O",
+                vyges_loom::lef::PinDir::Inout => "B",
+                _ => "I", // input / unknown → load
+            };
+            if cap > 0.0 {
+                s.push_str(&format!("*I *{iid}:{pin} {d} *L {}\n", val(cap)));
+            } else {
+                s.push_str(&format!("*I *{iid}:{pin} {d}\n"));
+            }
         }
 
         let (caps, res_lines) = match trees.get(n).and_then(|t| t.as_ref()) {
@@ -217,6 +236,14 @@ pub fn render_distributed(
         for (n_, c) in &caps {
             ci += 1;
             s.push_str(&format!("{ci} *{n_} {}\n", val(*c)));
+        }
+        // per-load pin Cin, grounded at the pin node (keeps Σ*CAP = *D_NET cap)
+        for (k, (iid, pin)) in pin_ids[n].iter().enumerate() {
+            let cap = hk[k].1;
+            if cap > 0.0 {
+                ci += 1;
+                s.push_str(&format!("{ci} *{iid}:{pin} {}\n", val(cap)));
+            }
         }
         // coupling caps listed under net A, between A's and B's representative nodes
         if let Some(list) = under.get(&net.name) {

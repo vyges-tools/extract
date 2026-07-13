@@ -21,6 +21,7 @@ vyges-extract — foundry-correlated RC parasitic extraction (DEF -> SPEF)
 
 usage:
   vyges-extract run    JOB [-o OUT] [--json] [--pdk NAME | --tech-lef PATH] [--refresh]
+                           [--cell-lef CL --lib LIB]   # std-cell *CONN hookup
   vyges-extract gen-rc (--pdk NAME | --tech-lef PATH) [--refresh]
   vyges-extract check  JOB
   vyges-extract demo   [-o OUT] [--json]
@@ -284,12 +285,46 @@ fn render(
     nets: &[NetParasitics],
     trees: &[Option<RcNetwork>],
     couplings: &[CouplingCap],
+    resolver: Option<&vyges_extract::hookup::PinResolver>,
     cli: &Cli,
 ) -> String {
     if cli.json {
         spef::render_json(design, nets, couplings)
     } else {
-        spef::render_distributed(design, &Units::default(), None, nets, trees, couplings)
+        spef::render_distributed(design, &Units::default(), None, nets, trees, couplings, resolver)
+    }
+}
+
+/// Build the std-cell pin resolver for `run`, opting in only when a cell LEF or a
+/// liberty was supplied. Cell-LEF source: `--cell-lef`, else the job's tech LEF
+/// (harmless if it carries no MACROs). Directions come from the LEF then liberty;
+/// per-load Cin from liberty. A bad collateral path is fatal (fail on wrong file).
+fn build_run_resolver(job: &ExtractJob, cli: &Cli) -> Option<vyges_extract::hookup::PinResolver> {
+    if cli.cell_lef.is_none() && cli.lib.is_none() {
+        return None;
+    }
+    if job.def.is_empty() {
+        return None;
+    }
+    let def = match vyges_extract::def::Def::load(&job.resolve(&job.def)) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("error: {}: {e}", job.def);
+            exit(1);
+        }
+    };
+    // cell-LEF source: --cell-lef (as given, relative to CWD), else the job's tech
+    // LEF resolved against the job dir. liberty: --lib (relative to CWD).
+    let cell_lef = cli
+        .cell_lef
+        .clone()
+        .or_else(|| job.lef.as_deref().map(|p| job.resolve(p)));
+    match vyges_extract::hookup::PinResolver::new(&def, cell_lef.as_deref(), cli.lib.as_deref()) {
+        Ok(r) => Some(r),
+        Err(e) => {
+            eprintln!("error: {e}");
+            exit(1);
+        }
     }
 }
 
@@ -411,7 +446,7 @@ fn main() {
         "demo" => {
             let (nets, couplings) = (demo_nets(), demo_couplings());
             emit_extract_events(&nets, &couplings);
-            write_out(&render("vyges_extract_demo", &nets, &[], &couplings, &cli), &cli)
+            write_out(&render("vyges_extract_demo", &nets, &[], &couplings, None, &cli), &cli)
         }
         "check" => {
             let Some(path) = cli.positionals.get(1) else {
@@ -490,7 +525,20 @@ fn main() {
                         );
                     }
                     emit_extract_events(&ex.nets, &ex.couplings);
-                    write_out(&render(&job.design, &ex.nets, &ex.trees, &ex.couplings, &cli), &cli);
+                    // Std-cell pin hookup: mark *CONN driver/load + per-load Cin from
+                    // the DEF placement + cell LEF (--cell-lef, else the job's tech LEF
+                    // if it carries MACROs) + liberty (--lib). Skipped when neither a
+                    // cell LEF nor a liberty is available.
+                    let resolver = build_run_resolver(&job, &cli);
+                    if cli.verbose {
+                        if let Some(r) = &resolver {
+                            if r.active() {
+                                eprintln!("std-cell hookup: *CONN direction + Cin from DEF/LEF/liberty");
+                            }
+                        }
+                    }
+                    let res_ref = resolver.as_ref().filter(|r| r.active());
+                    write_out(&render(&job.design, &ex.nets, &ex.trees, &ex.couplings, res_ref, &cli), &cli);
                 }
                 Err(e) => {
                     eprintln!("error: {e}");

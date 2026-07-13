@@ -63,3 +63,38 @@ fn deterministic_repeatable() {
     let b = render("counter", &Units::default(), None, &[net()], &[]);
     assert_eq!(a, b);
 }
+
+#[test]
+fn native_conn_hookup_direction_and_cin() {
+    use vyges_extract::def::Def;
+    use vyges_extract::hookup::PinResolver;
+    use vyges_extract::spef::render_distributed;
+    use vyges_loom::lef::Lef;
+    use vyges_loom::liberty::Lib;
+
+    // clk driven by clkbuf:X (output), loaded by ff0:CLK (input, Cin 3 fF)
+    let def = Def::parse(
+        "VERSION 5.8 ;\nDESIGN counter ;\nUNITS DISTANCE MICRONS 1000 ;\n\
+         COMPONENTS 2 ;\n- clkbuf CLKBUF_X1 + PLACED ( 0 0 ) N ;\n- ff0 DFF_X1 + PLACED ( 1 0 ) N ;\nEND COMPONENTS\n\
+         NETS 1 ;\n- clk ( clkbuf X ) ( ff0 CLK ) ;\nEND NETS\nEND DESIGN\n",
+    )
+    .unwrap();
+    let lef = Lef::parse(
+        "MACRO CLKBUF_X1\n PIN X\n  DIRECTION OUTPUT ;\n END X\nEND CLKBUF_X1\n\
+         MACRO DFF_X1\n PIN CLK\n  DIRECTION INPUT ;\n END CLK\nEND DFF_X1\n",
+    )
+    .unwrap();
+    let lib = Lib::parse(
+        "library(d){ capacitive_load_unit (1, ff);\n cell(CLKBUF_X1){pin(X){direction:output;}}\n cell(DFF_X1){pin(CLK){direction:input; capacitance:3.0;}} }\n",
+    )
+    .unwrap();
+    let resolver = PinResolver::from_loaded(&def, Some(lef), Some(lib));
+
+    let none: Vec<Option<vyges_extract::tree::RcNetwork>> = vec![None];
+    let s = render_distributed("counter", &Units::default(), None, &[net()], &none, &[], Some(&resolver));
+    // driver marked O, load marked I with its Cin
+    assert!(s.contains(":X O\n"), "spef:\n{s}");
+    assert!(s.contains(":CLK I *L 3"), "spef:\n{s}");
+    // net cap grew by the 3 fF load Cin (0.45 wire + 3.0)
+    assert!(s.contains("*D_NET *1 3.45"), "spef:\n{s}");
+}

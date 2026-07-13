@@ -30,6 +30,9 @@ pub mod tree;
 pub mod coupling;
 pub mod spef;
 pub mod engine;
+/// Std-cell pin/device hookup resolution (DEF + cell LEF + liberty → direction +
+/// Cin), shared by the native DEF path and the KLayout front end.
+pub mod hookup;
 /// KLayout → SPEF front end: drive a headless-KLayout GDS net/geometry dumper and
 /// render SPEF + the loom EM geometry sidecar. Parsing/serialization live in loom.
 pub mod klayout;

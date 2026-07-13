@@ -8,14 +8,12 @@
 //! An offline `self_test` (and a `--from-dump` path) exercise the whole
 //! parse→write→re-read pipeline without KLayout, so CI stays hermetic.
 
-use std::collections::HashMap;
 use std::process::Command;
 
+use crate::hookup::PinResolver;
 use vyges_loom::def::Def;
 use vyges_loom::emgeom::EmGeom;
 use vyges_loom::klayout as kl;
-use vyges_loom::lef::{Lef, PinDir};
-use vyges_loom::liberty::{Dir as LibDir, Lib};
 use vyges_loom::spef::{PinConn, Spef, WriteOpts};
 
 /// The embedded driver — written to a temp path when the caller doesn't point at
@@ -54,51 +52,19 @@ pub struct KlResult {
     pub total_cap_ff: f64,
 }
 
-fn lib_dir_to_pin(d: LibDir) -> PinDir {
-    match d {
-        LibDir::In => PinDir::Input,
-        LibDir::Out => PinDir::Output,
-        LibDir::Inout => PinDir::Inout,
-        LibDir::Other => PinDir::Unknown,
-    }
-}
-
 /// Attach std-cell pin/device hookup to an RC-only Spef: for each DEF net, add a
 /// `*CONN` entry per (instance,pin) with direction (cell LEF MACRO, else liberty)
 /// and, for loads, the liberty input capacitance — added to the net's total cap.
 /// Returns the number of pins hooked up. Net names must match between the SPEF
 /// (KLayout labels) and the DEF.
-pub fn attach_hookup(spef: &mut Spef, def: &Def, cell_lef: Option<&Lef>, lib: Option<&Lib>) -> usize {
-    let inst_cell: HashMap<&str, &str> =
-        def.comps.iter().map(|c| (c.name.as_str(), c.cell.as_str())).collect();
+pub fn attach_hookup(spef: &mut Spef, def: &Def, resolver: &PinResolver) -> usize {
     let mut hooked = 0;
     for dnet in &def.nets {
         let Some(rc) = spef.nets.get_mut(&dnet.name) else { continue };
         rc.conns.clear();
         let mut cin_sum = 0.0;
         for (inst, pin) in &dnet.pins {
-            let cell = inst_cell.get(inst.as_str()).copied();
-            // direction: cell LEF MACRO first, then liberty as a fallback
-            let mut dir = cell
-                .and_then(|c| cell_lef.map(|l| l.pin_dir(c, pin)))
-                .unwrap_or(PinDir::Unknown);
-            if dir == PinDir::Unknown {
-                if let Some(d) = cell
-                    .and_then(|c| lib.and_then(|lb| lb.cell(c)))
-                    .and_then(|cc| cc.pins.get(pin))
-                    .map(|p| lib_dir_to_pin(p.direction))
-                {
-                    dir = d;
-                }
-            }
-            // per-load Cin from liberty (Farads → fF) for input/inout pins
-            let cap_ff = if matches!(dir, PinDir::Input | PinDir::Inout) {
-                cell.and_then(|c| lib.and_then(|lb| lb.cell(c)))
-                    .map(|cc| cc.input_cap(pin) * 1e15)
-                    .unwrap_or(0.0)
-            } else {
-                0.0
-            };
+            let (dir, cap_ff) = resolver.resolve(inst, pin);
             cin_sum += cap_ff;
             rc.conns.push(PinConn {
                 inst: inst.clone(),
@@ -205,15 +171,8 @@ pub fn run(opts: &KlOpts, dump: Option<String>) -> Result<KlResult, String> {
     }
     if let Some(def_path) = &opts.def {
         let def = Def::load(def_path).map_err(|e| format!("{def_path}: {e}"))?;
-        let cell_lef = match &opts.cell_lef {
-            Some(p) => Some(Lef::load(p).map_err(|e| format!("{p}: {e}"))?),
-            None => None,
-        };
-        let lib = match &opts.lib {
-            Some(p) => Some(Lib::load(p).map_err(|e| format!("{p}: {e}"))?),
-            None => None,
-        };
-        attach_hookup(&mut spef, &def, cell_lef.as_ref(), lib.as_ref());
+        let resolver = PinResolver::new(&def, opts.cell_lef.as_deref(), opts.lib.as_deref())?;
+        attach_hookup(&mut spef, &def, &resolver);
     }
     Ok(render(&spef, &geom, design, &opts.version, opts.date.clone()))
 }
@@ -294,20 +253,22 @@ mod tests {
              NETS 1 ;\n- clk ( u1 Y ) ( u2 A ) ;\nEND NETS\nEND DESIGN\n",
         )
         .unwrap();
-        let cell_lef = Lef::parse(
+        let cell_lef = vyges_loom::lef::Lef::parse(
             "MACRO INV_X1\n PIN A\n  DIRECTION INPUT ;\n END A\n PIN Y\n  DIRECTION OUTPUT ;\n END Y\nEND INV_X1\n",
         )
         .unwrap();
-        let lib = Lib::parse(
+        let lib = vyges_loom::liberty::Lib::parse(
             "library(t) {\n  capacitive_load_unit (1, ff);\n  cell (INV_X1) {\n    pin(A) { direction: input; capacitance: 1.2; }\n    pin(Y) { direction: output; }\n  }\n}\n",
         )
         .unwrap();
 
-        let hooked = attach_hookup(&mut spef, &def, Some(&cell_lef), Some(&lib));
+        let resolver = PinResolver::from_loaded(&def, Some(cell_lef), Some(lib));
+        let hooked = attach_hookup(&mut spef, &def, &resolver);
         assert_eq!(hooked, 2);
         let rc = spef.nets.get("clk").unwrap();
         let y = rc.conns.iter().find(|c| c.pin == "Y").unwrap();
         let a = rc.conns.iter().find(|c| c.pin == "A").unwrap();
+        use vyges_loom::lef::PinDir;
         assert_eq!(y.dir, PinDir::Output);
         assert_eq!(a.dir, PinDir::Input);
         assert!((a.cap_ff - 1.2).abs() < 1e-6, "Cin was {}", a.cap_ff);
