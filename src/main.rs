@@ -482,6 +482,10 @@ fn main() {
         const DESCRIBE: &str = r#"{
   "name": "extract",
   "summary": "foundry-correlated RC parasitic extraction (DEF -> SPEF)",
+  "maturity": "workflow-validated",
+  "provenance_limitations": [
+      "The job names the DEF/LEF and the rules or captable; input_hash covers the job path and arguments, not their contents."
+  ],
   "invocation": {
     "args_template": ["run", "{job}"],
     "optional": [ { "arg": "out", "flag": "-o" } ],
