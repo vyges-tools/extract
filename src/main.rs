@@ -142,6 +142,20 @@ fn pdk_store_raw(pdk: &str, key: &str) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
+/// Whether a resolved collateral entry is a local absolute path, and so usable as a directory to
+/// write into. A URL scheme is the case that matters (`https:`, `s3:`, `git+ssh:`); a relative
+/// path is also rejected, because the directory it names depends on where the tool was invoked.
+fn is_local_path(s: &str) -> bool {
+    // A Windows drive letter (`C:\`) is not a scheme; a scheme is 2+ chars before the colon.
+    let scheme = s.split_once(':').map(|(head, _)| head).unwrap_or("");
+    let has_scheme = scheme.len() > 1
+        && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    !has_scheme && std::path::Path::new(s).is_absolute()
+}
+
 fn ensure_rc_rules(cli: &Cli) -> Result<String, String> {
     // tech LEF: explicit flag, else resolved from the PDK adapter.
     let tech_lef = match (&cli.tech_lef, &cli.pdk) {
@@ -153,7 +167,13 @@ fn ensure_rc_rules(cli: &Cli) -> Result<String, String> {
     // dir). Use a RAW resolve (the file itself need not exist — e.g. a PDK with no LVS
     // ruleset yet — we only want the directory).
     let cache = match &cli.pdk {
-        Some(p) => match pdk_store_raw(p, "extract_rules") {
+        // A collateral entry may be a URL rather than a local path — the catalog hosts the
+        // vyges-additions/ rulesets remotely, so `resolve <pdk> extract_rules` succeeds with an
+        // `https://` string for every PDK. Joining a filename onto that and writing it produced a
+        // literal `./https:/raw.githubusercontent.com/...` tree in the working directory, with the
+        // cached rules landing where nothing would look for them. Only a local absolute path can
+        // serve as a cache directory; anything else falls back to caching beside the tech LEF.
+        Some(p) => match pdk_store_raw(p, "extract_rules").filter(|er| is_local_path(er)) {
             Some(er) => {
                 let dir = std::path::Path::new(&er)
                     .parent()
@@ -831,4 +851,37 @@ fn emit_klayout_events(res: &vyges_extract::klayout::KlResult) {
         )
         .with_code("KLAYOUT-EXTRACT-DONE"),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_local_path;
+
+    /// A collateral entry that is a URL must never be treated as a directory to write into.
+    /// The catalog hosts every PDK's vyges-additions/ ruleset remotely, so this is the common
+    /// case, not an edge case: before this check, `gen-rc --pdk <any>` created a literal
+    /// `./https:/raw.githubusercontent.com/...` tree in the working directory.
+    #[test]
+    fn a_url_is_not_a_cache_directory() {
+        for url in [
+            "https://raw.githubusercontent.com/vyges-tools/pdk-catalog/main/descriptors/\
+             vyges-additions/asap7/vyges-extract.rules",
+            "http://example.invalid/a.rules",
+            "s3://bucket/key.rules",
+            "git+ssh://host/repo.git",
+        ] {
+            assert!(!is_local_path(url), "{url} must not be used as a path");
+        }
+    }
+
+    /// A relative path is rejected too: the directory it names depends on the working directory
+    /// the tool happened to be invoked from, which is not a property of the PDK.
+    #[test]
+    fn only_an_absolute_local_path_is_a_cache_directory() {
+        assert!(is_local_path(
+            "/opt/pdk/vyges-additions/asap7/vyges-extract.rules"
+        ));
+        assert!(!is_local_path("vyges-additions/asap7/vyges-extract.rules"));
+        assert!(!is_local_path("./rules"));
+    }
 }
