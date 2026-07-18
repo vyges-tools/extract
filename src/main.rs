@@ -21,6 +21,7 @@ vyges-extract — foundry-correlated RC parasitic extraction (DEF -> SPEF)
 
 usage:
   vyges-extract run    JOB [-o OUT] [--json] [--pdk NAME | --tech-lef PATH] [--refresh]
+                           [--captable PATH | --allow-incomplete-rc]
                            [--cell-lef CL --lib LIB]   # std-cell *CONN hookup
   vyges-extract gen-rc (--pdk NAME | --tech-lef PATH) [--refresh]
   vyges-extract check  JOB
@@ -38,13 +39,15 @@ an EM geometry sidecar (per-segment layer/width/length) for current-density sign
 RC rules come from a job's `rules:`, or are DERIVED from the PDK tech LEF via
 --pdk / --tech-lef (the metal stack is discovered, not hand-listed) and cached
 as vyges-additions/<pdk>/vyges-extract-rc.rules (regenerate with --refresh). When
-a tech LEF is geometry-only (no R/C), an OpenRCX captable supplies the numbers.
+a tech LEF is geometry-only (no R/C), an OpenRCX captable supplies the numbers;
+`run` refuses zero-R/C rules rather than report parasitics that are all zero.
 
 flags:
   --pdk NAME       derive RC rules from the PDK tech LEF (resolved via pdk-store)
   --tech-lef PATH  derive RC rules from this tech LEF directly
   --captable PATH  OpenRCX rules file for R/C the LEF lacks (else pdk-store captable)
   --refresh        re-derive the cached RC rules
+  --allow-incomplete-rc  extract even when a layer has no R/C (understates parasitics)
   -o FILE          write output to FILE (default: stdout)
   --json           per-net parasitics summary as JSON instead of SPEF
   -q, --quiet      suppress non-essential output
@@ -98,6 +101,7 @@ struct Cli {
     tech_lef: Option<String>,
     captable: Option<String>,
     refresh: bool,
+    allow_incomplete_rc: bool,
     // klayout2spef front end
     gds: Option<String>,
     top: Option<String>,
@@ -156,6 +160,37 @@ fn is_local_path(s: &str) -> bool {
     !has_scheme && std::path::Path::new(s).is_absolute()
 }
 
+/// Report layers with no resistance or no capacitance. Returns whether anything is missing.
+///
+/// Called at generation *and* on every load. The cache is the reason: `ensure_rc_rules` only
+/// re-derives when the file is absent or `--refresh` is passed, so a warning printed once at
+/// generation is invisible on every subsequent run — which is exactly when someone is relying
+/// on the numbers.
+fn warn_if_incomplete(rules: &vyges_extract::rules::RcRules) -> bool {
+    let (no_r, no_c) = rules.incomplete();
+    if !no_r.is_empty() {
+        eprintln!(
+            "warning: no resistance for [{}] — the tech LEF is geometry-only; pass \
+             --captable <rcx_rules>",
+            no_r.join(", ")
+        );
+    }
+    if !no_c.is_empty() {
+        // Only call the deck "resistance-only" when it actually has resistance — otherwise
+        // this message contradicts the one above it and misdescribes the deck.
+        let why = if no_r.is_empty() {
+            "RC is resistance-only"
+        } else {
+            "the deck carries neither R nor C for these layers"
+        };
+        eprintln!(
+            "warning: no capacitance for [{}] — {why}; pass --captable for cap",
+            no_c.join(", ")
+        );
+    }
+    !no_r.is_empty() || !no_c.is_empty()
+}
+
 fn ensure_rc_rules(cli: &Cli) -> Result<String, String> {
     // tech LEF: explicit flag, else resolved from the PDK adapter.
     let tech_lef = match (&cli.tech_lef, &cli.pdk) {
@@ -186,6 +221,13 @@ fn ensure_rc_rules(cli: &Cli) -> Result<String, String> {
         None => format!("{tech_lef}.vyges-extract-rc.rules"),
     };
     if std::path::Path::new(&cache).exists() && !cli.refresh {
+        // Re-check the cached deck before handing it back. This is the path that made the
+        // original defect invisible: the file already exists, nothing is re-derived, and
+        // without this the geometry-only warning is printed exactly once ever — on the run
+        // that generated it, quite possibly on someone else's machine.
+        if let Ok(r) = vyges_extract::rules::RcRules::load(&cache) {
+            warn_if_incomplete(&r);
+        }
         return Ok(cache);
     }
     let lef = vyges_loom::lef::Lef::load(&tech_lef).map_err(|e| format!("{tech_lef}: {e}"))?;
@@ -225,27 +267,11 @@ fn ensure_rc_rules(cli: &Cli) -> Result<String, String> {
             }
         }
     }
-    // Warn if R/C are still missing (no captable, or it didn't cover a layer).
-    let no_r: Vec<_> = rules
-        .layers
-        .iter()
-        .filter(|(_, l)| l.res_per_um == 0.0)
-        .map(|(n, _)| n.as_str())
-        .collect();
-    let no_c: Vec<_> = rules
-        .layers
-        .iter()
-        .filter(|(_, l)| l.cap_per_um == 0.0)
-        .map(|(n, _)| n.as_str())
-        .collect();
-    if !no_r.is_empty() {
-        eprintln!("warning: no resistance for [{}] — tech LEF is geometry-only; pass --captable <rcx_rules>", no_r.join(", "));
-    } else if !no_c.is_empty() {
-        eprintln!(
-            "warning: no capacitance for [{}] — RC is resistance-only; pass --captable for cap",
-            no_c.join(", ")
-        );
-    }
+    // Warn if R/C are still missing (no captable, or it didn't cover a layer). Note this is
+    // the *generation-time* warning only; the same check runs again on every load, because a
+    // cached ruleset is reused silently and this message would otherwise be printed once and
+    // never again.
+    warn_if_incomplete(&rules);
     if let Some(dir) = std::path::Path::new(&cache).parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
@@ -279,6 +305,7 @@ fn parse_cli(args: &[String]) -> Cli {
                 i += 1;
             }
             "--refresh" => c.refresh = true,
+            "--allow-incomplete-rc" => c.allow_incomplete_rc = true,
             "--gds" => {
                 c.gds = args.get(i + 1).cloned();
                 i += 1;
@@ -642,6 +669,33 @@ fn main() {
             } else if job.rules.is_empty() {
                 eprintln!("error: job has no `rules:` — pass --pdk NAME or --tech-lef PATH to derive them");
                 exit(2);
+            }
+            // Refuse to extract against a ruleset that says wires are perfect conductors.
+            //
+            // This check runs on the rules actually about to be used -- whether freshly
+            // derived, loaded from the cache, or named by the job's own `rules:` -- because
+            // the dangerous case is the silent one: the cache already exists, nothing is
+            // re-derived, no warning is printed, and the SPEF comes out full of zeros looking
+            // like a clean result. Zero parasitics are not a measurement, they are a missing
+            // input, and a tool that cannot tell the difference should say so rather than
+            // hand back confident numbers.
+            match vyges_extract::rules::RcRules::load(&job.rules) {
+                Ok(r) => {
+                    if warn_if_incomplete(&r) && !cli.allow_incomplete_rc {
+                        eprintln!(
+                            "error: {} has layers with no R and/or no C, so extraction would \
+                             report parasitics that are partly or wholly zero.\n       Supply \
+                             the missing numbers with --captable <rcx_rules>, or pass \
+                             --allow-incomplete-rc to extract anyway and accept that the \
+                             result understates parasitics.",
+                            job.rules
+                        );
+                        exit(2);
+                    }
+                }
+                // Not this check's job to diagnose an unreadable ruleset -- extraction is
+                // about to open the same file and will report it with better context.
+                Err(_) => {}
             }
             match engine::extract(&job) {
                 Ok(ex) => {

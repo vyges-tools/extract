@@ -363,6 +363,46 @@ impl RcRules {
         self.layers.get(name)
     }
 
+    /// Layers carrying no resistance and layers carrying no capacitance, as `(no_r, no_c)`.
+    ///
+    /// A tech LEF may be geometry-only: it describes the metal stack without the R/C that
+    /// belongs to an OpenRCX captable. Deriving rules from one yields a complete layer list
+    /// whose every value is zero — a ruleset that says every wire is a perfect conductor.
+    /// Extraction against it produces SPEF full of zeros, which looks like a clean result
+    /// rather than a missing input.
+    ///
+    /// This is **derived from the values, not stored**, deliberately. A flag written into the
+    /// file at generation time can disagree with the numbers beside it after a hand-edit or a
+    /// partial captable merge; a predicate computed from the data cannot. It also means a
+    /// hand-written ruleset gets the same check for free.
+    /// A layer with a non-zero **sheet** resistance is not missing resistance even when its
+    /// `res` column is zero — [`RcRules::wire_res`] prefers `rsheet` and only falls back to
+    /// `res`. Treating those as incomplete would refuse perfectly good rulesets.
+    pub fn incomplete(&self) -> (Vec<&str>, Vec<&str>) {
+        let no_r = self
+            .layers
+            .iter()
+            .filter(|(n, l)| {
+                l.res_per_um == 0.0 && self.rsheet.get(n.as_str()).copied().unwrap_or(0.0) == 0.0
+            })
+            .map(|(n, _)| n.as_str())
+            .collect();
+        let no_c = self
+            .layers
+            .iter()
+            .filter(|(_, l)| l.cap_per_um == 0.0)
+            .map(|(n, _)| n.as_str())
+            .collect();
+        (no_r, no_c)
+    }
+
+    /// Whether any layer is missing resistance or capacitance — the one-line form of
+    /// [`RcRules::incomplete`], for callers that only need to gate on it.
+    pub fn is_incomplete(&self) -> bool {
+        let (no_r, no_c) = self.incomplete();
+        !no_r.is_empty() || !no_c.is_empty()
+    }
+
     /// Resistance (ohm) of a `len_um`-long wire on `layer` that is `width_um` wide.
     /// When the layer has a **sheet resistance** and a positive width, this is the
     /// width-dependent `rsheet · len / width`; otherwise it falls back to the
@@ -379,5 +419,72 @@ impl RcRules {
     /// Areal coupling (fF/um^2) between two layers, if defined (order-independent).
     pub fn interlayer(&self, a: &str, b: &str) -> Option<f64> {
         self.interlayer.get(&pair_key(a, b)).copied()
+    }
+}
+
+#[cfg(test)]
+mod incomplete_tests {
+    use super::*;
+
+    fn deck(body: &str) -> RcRules {
+        RcRules::parse(body).expect("rules parse")
+    }
+
+    /// A tech LEF with no R/C yields a full layer list of zeros. Extraction against it would
+    /// report every wire as a perfect conductor, which reads as a clean result rather than a
+    /// missing input — so it has to be detectable after the fact, not only at generation.
+    #[test]
+    fn a_geometry_only_deck_is_incomplete() {
+        let r = deck("M1 0 0 0 0\nM2 0 0 0 0\n");
+        let (no_r, no_c) = r.incomplete();
+        assert_eq!(no_r, vec!["M1", "M2"]);
+        assert_eq!(no_c, vec!["M1", "M2"]);
+        assert!(r.is_incomplete());
+    }
+
+    #[test]
+    fn a_fully_specified_deck_is_complete() {
+        let r = deck("M1 0.1 0.2 0.05 1.0\nM2 0.1 0.2 0.05 1.0\n");
+        assert_eq!(r.incomplete(), (vec![], vec![]));
+        assert!(!r.is_incomplete());
+    }
+
+    /// The false positive worth guarding: `wire_res` prefers sheet resistance and only falls
+    /// back to the `res` column, so a layer with an rsheet is NOT missing resistance even
+    /// though its `res` is zero. Flagging it would refuse a perfectly good ruleset.
+    #[test]
+    fn sheet_resistance_counts_as_resistance() {
+        let r = deck("M1 0 0.2 0.05 1.0\nrsheet M1 0.09\n");
+        let (no_r, no_c) = r.incomplete();
+        assert!(
+            no_r.is_empty(),
+            "M1 has rsheet 0.09, so it is not missing resistance: {no_r:?}"
+        );
+        assert!(no_c.is_empty());
+        // And the resistance it reports is the sheet-based one (0.09 ohm/sq over 10 um at
+        // 1 um wide), confirming the fallback that makes this the right call. Compared with a
+        // tolerance because 0.09 * 10.0 is 0.8999999999999999 in binary floating point.
+        let got = r.wire_res("M1", 10.0, 1.0).expect("M1 has a rule");
+        assert!(
+            (got - 0.9).abs() < 1e-12,
+            "sheet-based resistance should be ~0.9, got {got}"
+        );
+    }
+
+    /// A zero rsheet is not a value, it is the absence of one — it must not mask a missing R.
+    #[test]
+    fn a_zero_rsheet_does_not_mask_a_missing_resistance() {
+        let r = deck("M1 0 0.2 0.05 1.0\nrsheet M1 0\n");
+        assert_eq!(r.incomplete().0, vec!["M1"]);
+    }
+
+    /// Resistance and capacitance are reported independently: a resistance-only deck is
+    /// incomplete for C alone, and the message should say so rather than blame both.
+    #[test]
+    fn missing_r_and_missing_c_are_reported_separately() {
+        let r = deck("M1 0.1 0 0.05 1.0\n");
+        let (no_r, no_c) = r.incomplete();
+        assert!(no_r.is_empty(), "M1 has resistance");
+        assert_eq!(no_c, vec!["M1"]);
     }
 }
