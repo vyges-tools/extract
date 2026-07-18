@@ -86,8 +86,12 @@ fn pair_cap(
 ) -> f64 {
     if sa.layer == sb.layer {
         // lateral coupling: parallel same-layer runs, edge-to-edge gap
-        let Some((ov, center_gap)) = overlap_gap(sa, sb) else { return 0.0 };
-        let Some(l) = rules.layer(&sa.layer) else { return 0.0 };
+        let Some((ov, center_gap)) = overlap_gap(sa, sb) else {
+            return 0.0;
+        };
+        let Some(l) = rules.layer(&sa.layer) else {
+            return 0.0;
+        };
         let gap = center_gap - width(&sa.layer);
         if gap > rules.couple_cutoff {
             return 0.0;
@@ -108,7 +112,11 @@ fn pair_cap(
     } else if let Some(coeff) = rules.interlayer(&sa.layer, &sb.layer) {
         // inter-layer (crossover) coupling: areal cap over the footprint overlap
         // (needs widths -> zero without a LEF).
-        coeff * rect_overlap(sa.footprint(width(&sa.layer)), sb.footprint(width(&sb.layer)))
+        coeff
+            * rect_overlap(
+                sa.footprint(width(&sa.layer)),
+                sb.footprint(width(&sb.layer)),
+            )
     } else {
         0.0
     }
@@ -258,8 +266,10 @@ pub fn extract_coupling_capped(
         .map(|lo| (lo, (lo + band).min(segs.len())))
         .collect();
     // `collect()` preserves band order, so the merge below is deterministic.
-    let partials: Vec<HashMap<(u32, u32), f64>> =
-        bands.par_iter().map(|&(lo, hi)| scan_band(lo, hi)).collect();
+    let partials: Vec<HashMap<(u32, u32), f64>> = bands
+        .par_iter()
+        .map(|&(lo, hi)| scan_band(lo, hi))
+        .collect();
 
     // Merge bands in order. Same-key adds happen band-by-band (= ascending id order),
     // so the summed cap of each pair is bit-identical to the serial sweep. The safety

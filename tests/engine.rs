@@ -7,7 +7,9 @@ use vyges_extract::job::ExtractJob;
 /// one net's `*D_NET … *END` block, and report whether any internal junction node
 /// (`*<netid>:<k>`) appears — i.e. the net was emitted as a distributed tree.
 fn net_block(spef: &str, dnet_id: &str) -> (f64, f64, bool) {
-    let start = spef.find(&format!("*D_NET {dnet_id} ")).expect("net present");
+    let start = spef
+        .find(&format!("*D_NET {dnet_id} "))
+        .expect("net present");
     let block = &spef[start..start + spef[start..].find("*END").unwrap()];
     let mut cap = 0.0;
     let mut res = 0.0;
@@ -64,7 +66,8 @@ fn example_counter_extracts_to_spef() {
     assert!(spef.contains("*D_NET *2 0.086912"), "n0 total\n{spef}");
     // coupling listed once as a two-node entry with the same value as before.
     assert!(
-        spef.lines().any(|l| l.contains("0.006512") && l.matches('*').count() == 2),
+        spef.lines()
+            .any(|l| l.contains("0.006512") && l.matches('*').count() == 2),
         "coupling clk-n0 two-node entry\n{spef}"
     );
 
@@ -72,14 +75,32 @@ fn example_counter_extracts_to_spef() {
     // and its node caps / edge resistances reconcile to the lumped totals (0.45 fF
     // grounded, 10.05 ohm — met1 + met2 runs + the M1M2 via).
     let (cap, res, internal) = net_block(&spef, "*1");
-    assert!(internal, "clk should expose an internal junction node\n{spef}");
-    assert!((cap - 0.45).abs() < 1e-6, "clk grounded cap sums to 0.45, got {cap}");
-    assert!((res - 10.05).abs() < 1e-6, "clk resistances sum to 10.05, got {res}");
-    assert!(spef.contains("9.300000"), "the M1M2 via resistor is present\n{spef}");
+    assert!(
+        internal,
+        "clk should expose an internal junction node\n{spef}"
+    );
+    assert!(
+        (cap - 0.45).abs() < 1e-6,
+        "clk grounded cap sums to 0.45, got {cap}"
+    );
+    assert!(
+        (res - 10.05).abs() < 1e-6,
+        "clk resistances sum to 10.05, got {res}"
+    );
+    assert!(
+        spef.contains("9.300000"),
+        "the M1M2 via resistor is present\n{spef}"
+    );
 
     // n0 likewise distributed and reconciled (ground 0.0804, R 3.94).
     let (cap2, res2, internal2) = net_block(&spef, "*2");
     assert!(internal2, "n0 should expose an internal junction node");
-    assert!((cap2 - 0.0804).abs() < 1e-6, "n0 grounded cap sums to 0.0804, got {cap2}");
-    assert!((res2 - 3.94).abs() < 1e-6, "n0 resistances sum to 3.94, got {res2}");
+    assert!(
+        (cap2 - 0.0804).abs() < 1e-6,
+        "n0 grounded cap sums to 0.0804, got {cap2}"
+    );
+    assert!(
+        (res2 - 3.94).abs() < 1e-6,
+        "n0 resistances sum to 3.94, got {res2}"
+    );
 }

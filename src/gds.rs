@@ -85,8 +85,12 @@ impl std::error::Error for GdsError {}
 fn parse_ld(s: &str) -> Result<Ld, GdsError> {
     let (a, b) = s.trim().split_once('/').unwrap_or((s.trim(), "0"));
     Ok((
-        a.trim().parse().map_err(|_| GdsError(format!("bad layer/datatype {s:?}")))?,
-        b.trim().parse().map_err(|_| GdsError(format!("bad layer/datatype {s:?}")))?,
+        a.trim()
+            .parse()
+            .map_err(|_| GdsError(format!("bad layer/datatype {s:?}")))?,
+        b.trim()
+            .parse()
+            .map_err(|_| GdsError(format!("bad layer/datatype {s:?}")))?,
     ))
 }
 
@@ -108,7 +112,11 @@ impl LayerMap {
                 }
                 "via" if !toks.is_empty() => m.vias.push(parse_ld(toks[0])?),
                 "label" if !toks.is_empty() => m.labels.push(parse_ld(toks[0])?),
-                other => return Err(GdsError(format!("unknown/!malformed rule: {other:?} {v:?}"))),
+                other => {
+                    return Err(GdsError(format!(
+                        "unknown/!malformed rule: {other:?} {v:?}"
+                    )))
+                }
             }
         }
         if m.routing.is_empty() {
@@ -118,8 +126,7 @@ impl LayerMap {
     }
 
     pub fn load(path: &str) -> Result<LayerMap, GdsError> {
-        let text =
-            std::fs::read_to_string(path).map_err(|e| GdsError(format!("{path}: {e}")))?;
+        let text = std::fs::read_to_string(path).map_err(|e| GdsError(format!("{path}: {e}")))?;
         LayerMap::parse(&text)
     }
 
@@ -131,18 +138,29 @@ impl LayerMap {
     }
 }
 
-
-
-
 /// Pull the axis-aligned rectangle for a Boundary/Box/Path element on layer `ld`.
 fn shape_rect(el: &Element) -> Option<(Ld, Rect)> {
     match el {
-        Element::Boundary { layer, datatype, pts } | Element::Box { layer, boxtype: datatype, pts } => {
+        Element::Boundary {
+            layer,
+            datatype,
+            pts,
+        }
+        | Element::Box {
+            layer,
+            boxtype: datatype,
+            pts,
+        } => {
             let r = Rect::from_boundary(pts).or_else(|| bbox(pts))?;
             Some(((*layer, *datatype), r))
         }
         // PATH read as its bbox (centerline-from-width is not modelled — see bounds).
-        Element::Path { layer, datatype, pts, .. } => Some(((*layer, *datatype), bbox(pts)?)),
+        Element::Path {
+            layer,
+            datatype,
+            pts,
+            ..
+        } => Some(((*layer, *datatype), bbox(pts)?)),
         _ => None,
     }
 }
@@ -176,7 +194,14 @@ fn trace_cell(cell: &Cell, map: &LayerMap, dbu_per_um: f64) -> Vec<DefNet> {
     let mut vias: Vec<Vec<(i32, i32)>> = Vec::new();
     let mut labels: Vec<(String, i16, i32, i32)> = Vec::new();
     for el in &cell.elements {
-        if let Element::Text { layer, texttype, x, y, string } = el {
+        if let Element::Text {
+            layer,
+            texttype,
+            x,
+            y,
+            string,
+        } = el
+        {
             if map.is_label((*layer, *texttype)) {
                 labels.push((string.clone(), *layer, *x, *y));
             }
@@ -208,14 +233,23 @@ fn trace_cell(cell: &Cell, map: &LayerMap, dbu_per_um: f64) -> Vec<DefNet> {
             .iter()
             .flat_map(|&pi| {
                 let name = map.routing[&t.prims[pi].layer].clone();
-                t.prims[pi].rects.iter().map(move |r| rect_to_segment(&name, r, dbu_per_um)).collect::<Vec<_>>()
+                t.prims[pi]
+                    .rects
+                    .iter()
+                    .map(move |r| rect_to_segment(&name, r, dbu_per_um))
+                    .collect::<Vec<_>>()
             })
             .collect();
         let name = t.names[nid].clone().unwrap_or_else(|| {
             anon += 1;
             format!("gnet_{anon}")
         });
-        nets.push(DefNet { name, pins: Vec::new(), segments, vias: t.cut_count[nid] });
+        nets.push(DefNet {
+            name,
+            pins: Vec::new(),
+            segments,
+            vias: t.cut_count[nid],
+        });
     }
     nets.sort_by(|a, b| a.name.cmp(&b.name));
     nets
@@ -225,7 +259,11 @@ fn trace_cell(cell: &Cell, map: &LayerMap, dbu_per_um: f64) -> Vec<DefNet> {
 pub fn trace_library(lib: &Library, top: &str, map: &LayerMap) -> Result<Vec<DefNet>, GdsError> {
     let flat = flatten(lib, top).map_err(GdsError)?;
     // GDS db_unit is metres/dbu; dbu per micron = 1e-6 / db_unit.
-    let dbu_per_um = if lib.db_unit > 0.0 { 1e-6 / lib.db_unit } else { 1000.0 };
+    let dbu_per_um = if lib.db_unit > 0.0 {
+        1e-6 / lib.db_unit
+    } else {
+        1000.0
+    };
     Ok(trace_cell(&flat, map, dbu_per_um))
 }
 
@@ -251,7 +289,8 @@ mod tests {
 
     fn map() -> LayerMap {
         // met1 = 68/20, met2 = 69/20, via = 67/44, label = 68/5
-        LayerMap::parse("routing: 68/20 met1\nrouting: 69/20 met2\nvia: 67/44\nlabel: 68/5\n").unwrap()
+        LayerMap::parse("routing: 68/20 met1\nrouting: 69/20 met2\nvia: 67/44\nlabel: 68/5\n")
+            .unwrap()
     }
 
     #[test]
@@ -260,8 +299,8 @@ mod tests {
         let cell = Cell {
             name: "top".into(),
             elements: vec![
-                rect(68, 20, 0, 0, 2000, 200),     // 2um run
-                rect(68, 20, 2000, 0, 5000, 200),  // abuts -> same net
+                rect(68, 20, 0, 0, 2000, 200),    // 2um run
+                rect(68, 20, 2000, 0, 5000, 200), // abuts -> same net
             ],
         };
         let nets = trace_cell(&cell, &map(), 1000.0);
@@ -277,9 +316,16 @@ mod tests {
         // met1 and met2 rects that overlap but NO via -> two separate nets
         let no_via = Cell {
             name: "t".into(),
-            elements: vec![rect(68, 20, 0, 0, 3000, 200), rect(69, 20, 2800, 0, 6000, 200)],
+            elements: vec![
+                rect(68, 20, 0, 0, 3000, 200),
+                rect(69, 20, 2800, 0, 6000, 200),
+            ],
         };
-        assert_eq!(trace_cell(&no_via, &map(), 1000.0).len(), 2, "no via -> not shorted");
+        assert_eq!(
+            trace_cell(&no_via, &map(), 1000.0).len(),
+            2,
+            "no via -> not shorted"
+        );
 
         // add a via cut overlapping both -> one net, via_count 1
         let with_via = Cell {
@@ -302,7 +348,13 @@ mod tests {
             name: "t".into(),
             elements: vec![
                 rect(68, 20, 0, 0, 4000, 200),
-                Element::Text { layer: 68, texttype: 5, x: 1000, y: 100, string: "vbias".into() },
+                Element::Text {
+                    layer: 68,
+                    texttype: 5,
+                    x: 1000,
+                    y: 100,
+                    string: "vbias".into(),
+                },
             ],
         };
         let nets = trace_cell(&cell, &map(), 1000.0);
@@ -323,7 +375,10 @@ mod tests {
     #[test]
     fn segment_run_is_the_long_side_not_the_width() {
         // a 5um-long, 0.2um-wide met1 rect -> 5um centerline, not 5.2 or width.
-        let cell = Cell { name: "t".into(), elements: vec![rect(68, 20, 0, 0, 5000, 200)] };
+        let cell = Cell {
+            name: "t".into(),
+            elements: vec![rect(68, 20, 0, 0, 5000, 200)],
+        };
         let nets = trace_cell(&cell, &map(), 1000.0);
         let s = &nets[0].segments[0];
         assert!((s.len_um() - 5.0).abs() < 1e-9, "len={}", s.len_um());
@@ -339,7 +394,13 @@ mod tests {
             name: "top".into(),
             elements: vec![
                 rect(68, 20, 0, 0, 10000, 140), // 10um met1
-                Element::Text { layer: 68, texttype: 5, x: 5000, y: 70, string: "bias".into() },
+                Element::Text {
+                    layer: 68,
+                    texttype: 5,
+                    x: 5000,
+                    y: 70,
+                    string: "bias".into(),
+                },
             ],
         });
         let nets = trace_library(&lib, "top", &map()).unwrap();

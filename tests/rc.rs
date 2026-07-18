@@ -68,14 +68,30 @@ fn ndr_segment_width_overrides_layer_default() {
 
     // default-width net: R = rsheet*len/width = 0.1*10/0.5 = 2.0
     let seg = Segment::wire("met1", 0.0, 0.0, 10.0, 0.0);
-    let def_net = DefNet { name: "a".into(), pins: vec![], segments: vec![seg.clone()], vias: 0 };
+    let def_net = DefNet {
+        name: "a".into(),
+        pins: vec![],
+        segments: vec![seg.clone()],
+        vias: 0,
+    };
     let r_default = extract_net(&def_net, &rules, &widths).unwrap().res_ohm;
-    assert!((r_default - 2.0).abs() < 1e-9, "default-width R = {r_default}");
+    assert!(
+        (r_default - 2.0).abs() < 1e-9,
+        "default-width R = {r_default}"
+    );
 
     // an NDR draws this wire at 1.0um -> R = 0.1*10/1.0 = 1.0, overriding the LEF 0.5
     let mut wide = seg;
     wide.width_um = 1.0;
-    let ndr_net = DefNet { name: "b".into(), pins: vec![], segments: vec![wide], vias: 0 };
+    let ndr_net = DefNet {
+        name: "b".into(),
+        pins: vec![],
+        segments: vec![wide],
+        vias: 0,
+    };
     let r_wide = extract_net(&ndr_net, &rules, &widths).unwrap().res_ohm;
-    assert!((r_wide - 1.0).abs() < 1e-9, "NDR width overrides the LEF default: {r_wide}");
+    assert!(
+        (r_wide - 1.0).abs() < 1e-9,
+        "NDR width overrides the LEF default: {r_wide}"
+    );
 }

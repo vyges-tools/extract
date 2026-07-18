@@ -48,12 +48,16 @@ fn coupling_adds_to_totals_and_caps() {
         res_ohm: 1.0,
         cap_ff: 0.20,
     };
-    let cpl = vec![CouplingCap { a: "clk".into(), b: "n0".into(), cap_ff: 0.03 }];
+    let cpl = vec![CouplingCap {
+        a: "clk".into(),
+        b: "n0".into(),
+        cap_ff: 0.03,
+    }];
     let s = render("c", &Units::default(), None, &[net(), n0], &cpl);
     // totals include the coupling on BOTH nets (clk id=1, n0 id=2)
     assert!(s.contains("*D_NET *1 0.480000"), "clk total"); // 0.45 + 0.03
     assert!(s.contains("*D_NET *2 0.230000"), "n0 total"); // 0.20 + 0.03
-    // coupling listed once, under net A (clk), as a two-node cap entry
+                                                           // coupling listed once, under net A (clk), as a two-node cap entry
     assert!(s.contains(" *1 *2 0.030000"), "coupling cap entry\n{s}");
 }
 
@@ -91,7 +95,15 @@ fn native_conn_hookup_direction_and_cin() {
     let resolver = PinResolver::from_loaded(&def, Some(lef), Some(lib));
 
     let none: Vec<Option<vyges_extract::tree::RcNetwork>> = vec![None];
-    let s = render_distributed("counter", &Units::default(), None, &[net()], &none, &[], Some(&resolver));
+    let s = render_distributed(
+        "counter",
+        &Units::default(),
+        None,
+        &[net()],
+        &none,
+        &[],
+        Some(&resolver),
+    );
     // driver marked O, load marked I with its Cin
     assert!(s.contains(":X O\n"), "spef:\n{s}");
     assert!(s.contains(":CLK I *L 3"), "spef:\n{s}");

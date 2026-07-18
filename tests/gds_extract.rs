@@ -9,10 +9,20 @@ use vyges_extract::rules::RcRules;
 use vyges_layout::gds::{Cell, Element, Library};
 
 fn rect(layer: i16, datatype: i16, x0: i32, y0: i32, x1: i32, y1: i32) -> Element {
-    Element::Boundary { layer, datatype, pts: vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)] }
+    Element::Boundary {
+        layer,
+        datatype,
+        pts: vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)],
+    }
 }
 fn label(s: &str, x: i32, y: i32) -> Element {
-    Element::Text { layer: 68, texttype: 5, x, y, string: s.into() }
+    Element::Text {
+        layer: 68,
+        texttype: 5,
+        x,
+        y,
+        string: s.into(),
+    }
 }
 
 fn layer_map() -> LayerMap {

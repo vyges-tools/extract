@@ -60,7 +60,9 @@ pub struct KlResult {
 pub fn attach_hookup(spef: &mut Spef, def: &Def, resolver: &PinResolver) -> usize {
     let mut hooked = 0;
     for dnet in &def.nets {
-        let Some(rc) = spef.nets.get_mut(&dnet.name) else { continue };
+        let Some(rc) = spef.nets.get_mut(&dnet.name) else {
+            continue;
+        };
         rc.conns.clear();
         let mut cin_sum = 0.0;
         for (inst, pin) in &dnet.pins {
@@ -80,7 +82,13 @@ pub fn attach_hookup(spef: &mut Spef, def: &Def, resolver: &PinResolver) -> usiz
     hooked
 }
 
-fn render(spef: &Spef, geom: &EmGeom, design: &str, version: &str, date: Option<String>) -> KlResult {
+fn render(
+    spef: &Spef,
+    geom: &EmGeom,
+    design: &str,
+    version: &str,
+    date: Option<String>,
+) -> KlResult {
     let n_nets = spef.nets.len();
     let n_segs = geom.segs.len();
     let n_pins = spef.nets.values().map(|n| n.conns.len()).sum();
@@ -91,7 +99,14 @@ fn render(spef: &Spef, geom: &EmGeom, design: &str, version: &str, date: Option<
         version: version.to_string(),
         date,
     };
-    KlResult { spef: spef.to_spef(&opts), geom: geom.to_text(), n_nets, n_segs, n_pins, total_cap_ff }
+    KlResult {
+        spef: spef.to_spef(&opts),
+        geom: geom.to_text(),
+        n_nets,
+        n_segs,
+        n_pins,
+        total_cap_ff,
+    }
 }
 
 /// Resolve the driver path: the caller's `--driver`, else materialize the embedded
@@ -122,10 +137,18 @@ pub fn run_driver(opts: &KlOpts) -> Result<String, String> {
     let mut cmd = Command::new(prog);
     cmd.args(prefix);
     cmd.arg(&driver)
-        .arg("--gds").arg(&opts.gds)
-        .arg("--layermap").arg(&opts.layermap)
-        .arg("--out").arg("-")
-        .arg("--design").arg(if opts.design.is_empty() { "top" } else { &opts.design });
+        .arg("--gds")
+        .arg(&opts.gds)
+        .arg("--layermap")
+        .arg(&opts.layermap)
+        .arg("--out")
+        .arg("-")
+        .arg("--design")
+        .arg(if opts.design.is_empty() {
+            "top"
+        } else {
+            &opts.design
+        });
     if !opts.top.is_empty() {
         cmd.arg("--top").arg(&opts.top);
     }
@@ -142,7 +165,10 @@ pub fn run_driver(opts: &KlOpts) -> Result<String, String> {
     if !out.status.success() {
         return Err(format!(
             "KLayout driver exited with {}",
-            out.status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".into())
+            out.status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".into())
         ));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
@@ -164,7 +190,11 @@ pub fn run(opts: &KlOpts, dump: Option<String>) -> Result<KlResult, String> {
         Some(d) => d,
         None => run_driver(opts)?,
     };
-    let design = if opts.design.is_empty() { "top" } else { &opts.design };
+    let design = if opts.design.is_empty() {
+        "top"
+    } else {
+        &opts.design
+    };
     let (mut spef, mut geom): (Spef, EmGeom) = kl::parse(&text);
     if geom.design.is_empty() {
         geom.design = design.to_string();
@@ -174,7 +204,13 @@ pub fn run(opts: &KlOpts, dump: Option<String>) -> Result<KlResult, String> {
         let resolver = PinResolver::new(&def, opts.cell_lef.as_deref(), opts.lib.as_deref())?;
         attach_hookup(&mut spef, &def, &resolver);
     }
-    Ok(render(&spef, &geom, design, &opts.version, opts.date.clone()))
+    Ok(render(
+        &spef,
+        &geom,
+        design,
+        &opts.version,
+        opts.date.clone(),
+    ))
 }
 
 /// Offline pipeline check — no KLayout. Builds a synthetic net-dump, runs it
@@ -202,7 +238,10 @@ GCAP dat 5
     }
     // SPEF must round-trip through the reader.
     let back = Spef::parse(&res.spef);
-    let clk = back.nets.get("clk").ok_or("clk net lost in SPEF round-trip")?;
+    let clk = back
+        .nets
+        .get("clk")
+        .ok_or("clk net lost in SPEF round-trip")?;
     if (clk.res_ohm - 390.0).abs() > 1e-6 {
         return Err(format!("clk res_ohm {} != 390", clk.res_ohm));
     }
@@ -240,13 +279,18 @@ mod tests {
         assert_eq!(r.n_segs, 1);
         assert!(r.spef.contains("*D_NET"));
         // geom sidecar line: SEG <net> <a> <b> <layer> <w> <l> <res>
-        assert!(r.geom.contains("SEG n0 n0 n0^met1 met1 0.1 5 100"), "geom was:\n{}", r.geom);
+        assert!(
+            r.geom.contains("SEG n0 n0 n0^met1 met1 0.1 5 100"),
+            "geom was:\n{}",
+            r.geom
+        );
     }
 
     #[test]
     fn hookup_marks_driver_load_and_cin() {
         // RC-only Spef from KLayout
-        let (mut spef, _) = kl::parse("DESIGN t\nNET clk 2.0\nSEG clk clk^met1 100 met1 0.14 5\nGCAP clk 2.0\n");
+        let (mut spef, _) =
+            kl::parse("DESIGN t\nNET clk 2.0\nSEG clk clk^met1 100 met1 0.14 5\nGCAP clk 2.0\n");
         let def = Def::parse(
             "VERSION 5.8 ;\nDESIGN t ;\nUNITS DISTANCE MICRONS 1000 ;\n\
              COMPONENTS 2 ;\n- u1 INV_X1 + PLACED ( 0 0 ) N ;\n- u2 INV_X1 + PLACED ( 1000 0 ) N ;\nEND COMPONENTS\n\
@@ -272,11 +316,25 @@ mod tests {
         assert_eq!(y.dir, PinDir::Output);
         assert_eq!(a.dir, PinDir::Input);
         assert!((a.cap_ff - 1.2).abs() < 1e-6, "Cin was {}", a.cap_ff);
-        assert!((rc.cap_ff - 3.2).abs() < 1e-6, "net cap should be 2.0 + 1.2 Cin, was {}", rc.cap_ff);
+        assert!(
+            (rc.cap_ff - 3.2).abs() < 1e-6,
+            "net cap should be 2.0 + 1.2 Cin, was {}",
+            rc.cap_ff
+        );
 
         // and it renders standard *CONN with O/I + *L
-        let out = render(&spef, &vyges_loom::emgeom::EmGeom::default(), "t", "0", None);
-        assert!(out.spef.contains(" O\n") && out.spef.contains(" I *L 1.2"), "spef:\n{}", out.spef);
+        let out = render(
+            &spef,
+            &vyges_loom::emgeom::EmGeom::default(),
+            "t",
+            "0",
+            None,
+        );
+        assert!(
+            out.spef.contains(" O\n") && out.spef.contains(" I *L 1.2"),
+            "spef:\n{}",
+            out.spef
+        );
         assert_eq!(out.n_pins, 2);
     }
 }

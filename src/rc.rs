@@ -48,7 +48,10 @@ pub fn extract_net(
     let mut cap_ff = 0.0;
     for seg in &net.segments {
         let l = rules.layer(&seg.layer).ok_or_else(|| {
-            RcError(format!("net {}: no rule for layer {:?}", net.name, seg.layer))
+            RcError(format!(
+                "net {}: no rule for layer {:?}",
+                net.name, seg.layer
+            ))
         })?;
         // per-segment NDR width wins over the layer default (LEF) when one is drawn
         let w = if seg.width_um > 0.0 {

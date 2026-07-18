@@ -76,7 +76,10 @@ fn node_of(
         return i;
     }
     let i = nodes.len();
-    nodes.push(RcNode { cap_ff: 0.0, pin: None });
+    nodes.push(RcNode {
+        cap_ff: 0.0,
+        pin: None,
+    });
     sub.insert(key, i);
     let layers = at_loc.entry(loc).or_default();
     if !layers.iter().any(|l| l == layer) {
@@ -124,7 +127,9 @@ pub fn build_network(
             } else {
                 widths.get(&seg.layer).copied().unwrap_or(0.0)
             };
-            let res_ohm = rules.wire_res(&seg.layer, len, w).unwrap_or(len * l.res_per_um);
+            let res_ohm = rules
+                .wire_res(&seg.layer, len, w)
+                .unwrap_or(len * l.res_per_um);
             edges.push(RcEdge { a, b, res_ohm });
         }
     }
@@ -141,7 +146,11 @@ pub fn build_network(
         for w in ls.windows(2) {
             let a = sub[&(loc.0, loc.1, w[0].clone())];
             let b = sub[&(loc.0, loc.1, w[1].clone())];
-            edges.push(RcEdge { a, b, res_ohm: rules.via_res.max(0.0) });
+            edges.push(RcEdge {
+                a,
+                b,
+                res_ohm: rules.via_res.max(0.0),
+            });
         }
     }
 
@@ -180,7 +189,12 @@ pub fn build_network(
 
     let raw_cap: f64 = nodes.iter().map(|n| n.cap_ff).sum();
     let raw_res: f64 = edges.iter().map(|e| e.res_ohm).sum();
-    Some(RcNetwork { nodes, edges, raw_cap, raw_res })
+    Some(RcNetwork {
+        nodes,
+        edges,
+        raw_cap,
+        raw_res,
+    })
 }
 
 #[cfg(test)]
@@ -206,7 +220,7 @@ mod tests {
         assert_eq!(t.edges.len(), 1);
         assert!((t.raw_res - 1.0).abs() < 1e-9, "10um * 0.1 = 1.0"); // wire R
         assert!((t.raw_cap - 0.5).abs() < 1e-9, "10um * 0.05 = 0.5"); // grounded C
-        // each pin landed on its own endpoint
+                                                                      // each pin landed on its own endpoint
         assert!(t.nodes.iter().filter(|n| n.pin.is_some()).count() == 2);
     }
 
@@ -222,8 +236,8 @@ mod tests {
                 ("s1".into(), "A".into()),
             ],
             segments: vec![
-                seg("met1", 0.0, 0.0, 10.0, 0.0),  // spine
-                seg("met1", 10.0, 0.0, 10.0, 5.0), // branch up
+                seg("met1", 0.0, 0.0, 10.0, 0.0),   // spine
+                seg("met1", 10.0, 0.0, 10.0, 5.0),  // branch up
                 seg("met1", 10.0, 0.0, 10.0, -5.0), // branch down
             ],
             vias: 0,
@@ -238,7 +252,10 @@ mod tests {
             degree[e.a] += 1;
             degree[e.b] += 1;
         }
-        let fork = degree.iter().position(|&d| d == 3).expect("a degree-3 junction exists");
+        let fork = degree
+            .iter()
+            .position(|&d| d == 3)
+            .expect("a degree-3 junction exists");
         assert!(t.nodes[fork].pin.is_none(), "the junction is internal");
     }
 
@@ -248,7 +265,10 @@ mod tests {
         let net = DefNet {
             name: "n".into(),
             pins: vec![("u0".into(), "Y".into()), ("u1".into(), "A".into())],
-            segments: vec![seg("met1", 0.0, 0.0, 10.0, 0.0), seg("met2", 10.0, 0.0, 10.0, 8.0)],
+            segments: vec![
+                seg("met1", 0.0, 0.0, 10.0, 0.0),
+                seg("met2", 10.0, 0.0, 10.0, 8.0),
+            ],
             vias: 1,
         };
         let rules = RcRules::parse("met1 0.1 0.05 0.0\nmet2 0.1 0.05 0.0\nvia 5.0\n").unwrap();
@@ -257,6 +277,9 @@ mod tests {
         assert_eq!(t.nodes.len(), 4);
         // 2 wire resistors + 1 via resistor
         assert_eq!(t.edges.len(), 3);
-        assert!(t.edges.iter().any(|e| (e.res_ohm - 5.0).abs() < 1e-9), "via resistor present");
+        assert!(
+            t.edges.iter().any(|e| (e.res_ohm - 5.0).abs() < 1e-9),
+            "via resistor present"
+        );
     }
 }

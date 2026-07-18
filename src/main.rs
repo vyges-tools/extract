@@ -71,7 +71,11 @@ fn link(label: &str, url: &str) {
     use std::io::IsTerminal;
     println!("{label}:\n  {url}");
     if std::io::stdout().is_terminal() {
-        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        let opener = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
         let _ = std::process::Command::new(opener).arg(url).status();
     }
 }
@@ -127,7 +131,10 @@ fn pdk_store_raw(pdk: &str, key: &str) -> Option<String> {
         .filter(|p| p.exists())
         .map(|p| p.to_string_lossy().into_owned());
     let prog = sibling.unwrap_or_else(|| "vyges-pdk-store".into());
-    let out = std::process::Command::new(prog).args(["resolve", pdk, key]).output().ok()?;
+    let out = std::process::Command::new(prog)
+        .args(["resolve", pdk, key])
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -148,7 +155,10 @@ fn ensure_rc_rules(cli: &Cli) -> Result<String, String> {
     let cache = match &cli.pdk {
         Some(p) => match pdk_store_raw(p, "extract_rules") {
             Some(er) => {
-                let dir = std::path::Path::new(&er).parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+                let dir = std::path::Path::new(&er)
+                    .parent()
+                    .map(|d| d.to_string_lossy().into_owned())
+                    .unwrap_or_default();
                 format!("{dir}/vyges-extract-rc.rules")
             }
             None => format!("{tech_lef}.vyges-extract-rc.rules"),
@@ -163,11 +173,16 @@ fn ensure_rc_rules(cli: &Cli) -> Result<String, String> {
     // Not every tech LEF carries R/C (some are geometry-only; RC lives in an OpenRCX
     // captable). Fill any missing R/C from a captable — explicit `--captable`, else the
     // PDK's `captable` collateral — mapping the captable's `Metal N` via the LEF stack.
-    let captable = cli
-        .captable
-        .clone()
-        .or_else(|| cli.pdk.as_deref().and_then(|p| vyges_layout::pdk::resolve(p, "captable", None).ok()));
-    let incomplete = |r: &vyges_extract::rules::RcRules| r.layers.values().any(|l| l.res_per_um == 0.0 || l.cap_per_um == 0.0);
+    let captable = cli.captable.clone().or_else(|| {
+        cli.pdk
+            .as_deref()
+            .and_then(|p| vyges_layout::pdk::resolve(p, "captable", None).ok())
+    });
+    let incomplete = |r: &vyges_extract::rules::RcRules| {
+        r.layers
+            .values()
+            .any(|l| l.res_per_um == 0.0 || l.cap_per_um == 0.0)
+    };
     if incomplete(&rules) {
         if let Some(cap) = &captable {
             if let Ok(rcx) = std::fs::read_to_string(cap) {
@@ -191,12 +206,25 @@ fn ensure_rc_rules(cli: &Cli) -> Result<String, String> {
         }
     }
     // Warn if R/C are still missing (no captable, or it didn't cover a layer).
-    let no_r: Vec<_> = rules.layers.iter().filter(|(_, l)| l.res_per_um == 0.0).map(|(n, _)| n.as_str()).collect();
-    let no_c: Vec<_> = rules.layers.iter().filter(|(_, l)| l.cap_per_um == 0.0).map(|(n, _)| n.as_str()).collect();
+    let no_r: Vec<_> = rules
+        .layers
+        .iter()
+        .filter(|(_, l)| l.res_per_um == 0.0)
+        .map(|(n, _)| n.as_str())
+        .collect();
+    let no_c: Vec<_> = rules
+        .layers
+        .iter()
+        .filter(|(_, l)| l.cap_per_um == 0.0)
+        .map(|(n, _)| n.as_str())
+        .collect();
     if !no_r.is_empty() {
         eprintln!("warning: no resistance for [{}] — tech LEF is geometry-only; pass --captable <rcx_rules>", no_r.join(", "));
     } else if !no_c.is_empty() {
-        eprintln!("warning: no capacitance for [{}] — RC is resistance-only; pass --captable for cap", no_c.join(", "));
+        eprintln!(
+            "warning: no capacitance for [{}] — RC is resistance-only; pass --captable for cap",
+            no_c.join(", ")
+        );
     }
     if let Some(dir) = std::path::Path::new(&cache).parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -231,22 +259,64 @@ fn parse_cli(args: &[String]) -> Cli {
                 i += 1;
             }
             "--refresh" => c.refresh = true,
-            "--gds" => { c.gds = args.get(i + 1).cloned(); i += 1; }
-            "--top" => { c.top = args.get(i + 1).cloned(); i += 1; }
-            "--layermap" => { c.layermap = args.get(i + 1).cloned(); i += 1; }
+            "--gds" => {
+                c.gds = args.get(i + 1).cloned();
+                i += 1;
+            }
+            "--top" => {
+                c.top = args.get(i + 1).cloned();
+                i += 1;
+            }
+            "--layermap" => {
+                c.layermap = args.get(i + 1).cloned();
+                i += 1;
+            }
             "--routing-only" => c.routing_only = true,
-            "--geom-out" => { c.geom_out = args.get(i + 1).cloned(); i += 1; }
-            "--from-dump" => { c.from_dump = args.get(i + 1).cloned(); i += 1; }
+            "--geom-out" => {
+                c.geom_out = args.get(i + 1).cloned();
+                i += 1;
+            }
+            "--from-dump" => {
+                c.from_dump = args.get(i + 1).cloned();
+                i += 1;
+            }
             "--self-test" => c.self_test = true,
-            "--python" => { c.python = args.get(i + 1).cloned(); i += 1; }
-            "--runner" => { c.runner = args.get(i + 1).cloned(); i += 1; }
-            "--image" => { c.image = args.get(i + 1).cloned(); i += 1; }
-            "--mount" => { c.mount = args.get(i + 1).cloned(); i += 1; }
-            "--driver" => { c.driver = args.get(i + 1).cloned(); i += 1; }
-            "--date" => { c.date = args.get(i + 1).cloned(); i += 1; }
-            "--def" => { c.def = args.get(i + 1).cloned(); i += 1; }
-            "--cell-lef" => { c.cell_lef = args.get(i + 1).cloned(); i += 1; }
-            "--lib" => { c.lib = args.get(i + 1).cloned(); i += 1; }
+            "--python" => {
+                c.python = args.get(i + 1).cloned();
+                i += 1;
+            }
+            "--runner" => {
+                c.runner = args.get(i + 1).cloned();
+                i += 1;
+            }
+            "--image" => {
+                c.image = args.get(i + 1).cloned();
+                i += 1;
+            }
+            "--mount" => {
+                c.mount = args.get(i + 1).cloned();
+                i += 1;
+            }
+            "--driver" => {
+                c.driver = args.get(i + 1).cloned();
+                i += 1;
+            }
+            "--date" => {
+                c.date = args.get(i + 1).cloned();
+                i += 1;
+            }
+            "--def" => {
+                c.def = args.get(i + 1).cloned();
+                i += 1;
+            }
+            "--cell-lef" => {
+                c.cell_lef = args.get(i + 1).cloned();
+                i += 1;
+            }
+            "--lib" => {
+                c.lib = args.get(i + 1).cloned();
+                i += 1;
+            }
             "--json" => c.json = true,
             "-q" | "--quiet" => c.quiet = true,
             "-v" | "--verbose" => c.verbose = true,
@@ -291,7 +361,15 @@ fn render(
     if cli.json {
         spef::render_json(design, nets, couplings)
     } else {
-        spef::render_distributed(design, &Units::default(), None, nets, trees, couplings, resolver)
+        spef::render_distributed(
+            design,
+            &Units::default(),
+            None,
+            nets,
+            trees,
+            couplings,
+            resolver,
+        )
     }
 }
 
@@ -346,7 +424,11 @@ fn demo_nets() -> Vec<NetParasitics> {
 }
 
 fn demo_couplings() -> Vec<CouplingCap> {
-    vec![CouplingCap { a: "clk".into(), b: "n0".into(), cap_ff: 0.42 }]
+    vec![CouplingCap {
+        a: "clk".into(),
+        b: "n0".into(),
+        cap_ff: 0.42,
+    }]
 }
 
 /// Emit the vyges-events causal trail for an extraction result on STDERR (never
@@ -357,14 +439,22 @@ fn demo_couplings() -> Vec<CouplingCap> {
 fn emit_extract_events(nets: &[NetParasitics], couplings: &[CouplingCap]) {
     use vyges_events::{Event, Severity};
     let e = |sev, code: &str, msg: String, objs: Vec<String>| {
-        vyges_events::emit(&Event::new("vyges-extract", sev, msg).with_code(code).with_objects(objs));
+        vyges_events::emit(
+            &Event::new("vyges-extract", sev, msg)
+                .with_code(code)
+                .with_objects(objs),
+        );
     };
     for n in nets {
         if n.pins.len() < 2 {
             e(
                 Severity::Warn,
                 "EXTRACT-UNCONNECTED",
-                format!("net '{}' has {} pin(s) — no complete connection to extract", n.name, n.pins.len()),
+                format!(
+                    "net '{}' has {} pin(s) — no complete connection to extract",
+                    n.name,
+                    n.pins.len()
+                ),
                 vec![format!("net:{}", n.name)],
             );
         }
@@ -394,16 +484,18 @@ fn main() {
   "summary": "foundry-correlated RC parasitic extraction (DEF -> SPEF)",
   "invocation": {
     "args_template": ["run", "{job}"],
+    "optional": [ { "arg": "out", "flag": "-o" } ],
     "emits_json": true
   },
   "inputs": {
     "type": "object",
     "required": ["job"],
     "properties": {
-      "job": { "type": "string", "description": "path to the extract job file (design, def, rules, corner, temp)" }
+      "job": { "type": "string", "description": "path to the extract job file (design, def, rules, corner, temp)" },
+      "out": { "type": "string", "description": "write the SPEF to FILE instead of stdout" }
     }
   },
-  "artifacts": [ { "role": "spef" }, { "role": "emgeom" } ],
+  "artifacts": [ { "role": "spef", "from_arg": "out" } ],
   "consumes": ["def", "gds"]
 }
 "#;
@@ -416,7 +508,9 @@ fn main() {
     // Size the rayon thread pool once, before any parallel extraction. Default (flag absent)
     // lets rayon use all available cores; `-j N` caps it (`-j 1` = serial).
     if let Some(n) = cli.threads {
-        let _ = rayon::ThreadPoolBuilder::new().num_threads(n).build_global();
+        let _ = rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .build_global();
     }
 
     if cli.bug_report {
@@ -432,7 +526,11 @@ fn main() {
         return link("Star vyges-extract on GitHub ⭐", STAR_URL);
     }
     if cli.version {
-        println!("vyges-extract {} ({})", vyges_extract::VERSION, env!("VYGES_GIT_SHA"));
+        println!(
+            "vyges-extract {} ({})",
+            vyges_extract::VERSION,
+            env!("VYGES_GIT_SHA")
+        );
         println!("{}", vyges_extract::COPYRIGHT);
         return;
     }
@@ -446,7 +544,10 @@ fn main() {
         "demo" => {
             let (nets, couplings) = (demo_nets(), demo_couplings());
             emit_extract_events(&nets, &couplings);
-            write_out(&render("vyges_extract_demo", &nets, &[], &couplings, None, &cli), &cli)
+            write_out(
+                &render("vyges_extract_demo", &nets, &[], &couplings, None, &cli),
+                &cli,
+            )
         }
         "check" => {
             let Some(path) = cli.positionals.get(1) else {
@@ -533,12 +634,24 @@ fn main() {
                     if cli.verbose {
                         if let Some(r) = &resolver {
                             if r.active() {
-                                eprintln!("std-cell hookup: *CONN direction + Cin from DEF/LEF/liberty");
+                                eprintln!(
+                                    "std-cell hookup: *CONN direction + Cin from DEF/LEF/liberty"
+                                );
                             }
                         }
                     }
                     let res_ref = resolver.as_ref().filter(|r| r.active());
-                    write_out(&render(&job.design, &ex.nets, &ex.trees, &ex.couplings, res_ref, &cli), &cli);
+                    write_out(
+                        &render(
+                            &job.design,
+                            &ex.nets,
+                            &ex.trees,
+                            &ex.couplings,
+                            res_ref,
+                            &cli,
+                        ),
+                        &cli,
+                    );
                 }
                 Err(e) => {
                     eprintln!("error: {e}");
@@ -577,9 +690,10 @@ fn klayout2spef(cli: &Cli) {
     // Build the python invocation. A container runner is just a prefix that mounts
     // a directory into the image and runs its `python3` (KLayout pymod on PATH).
     let python: Option<String> = if let Some(runner) = &cli.runner {
-        let image = cli.image.clone().unwrap_or_else(|| {
-            "ghcr.io/vyges-tools/vyges-klayout:0.30.9".to_string()
-        });
+        let image = cli
+            .image
+            .clone()
+            .unwrap_or_else(|| "ghcr.io/vyges-tools/vyges-klayout:0.30.9".to_string());
         let mount = cli.mount.clone().unwrap_or_else(|| {
             // default: the GDS's directory (absolute), where the driver is staged
             cli.gds
@@ -617,12 +731,14 @@ fn klayout2spef(cli: &Cli) {
     let design = cli
         .top
         .clone()
-        .or_else(|| cli.gds.as_deref().map(|g| {
-            std::path::Path::new(g)
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "top".into())
-        }))
+        .or_else(|| {
+            cli.gds.as_deref().map(|g| {
+                std::path::Path::new(g)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "top".into())
+            })
+        })
         .unwrap_or_else(|| "top".into());
 
     let opts = KlOpts {
@@ -631,7 +747,9 @@ fn klayout2spef(cli: &Cli) {
         layermap: cli.layermap.clone().unwrap_or_default(),
         design,
         routing_only: cli.routing_only,
-        python: python.map(|s| s.split_whitespace().map(String::from).collect()).unwrap_or_default(),
+        python: python
+            .map(|s| s.split_whitespace().map(String::from).collect())
+            .unwrap_or_default(),
         driver: cli.driver.clone(),
         version: vyges_extract::VERSION.to_string(),
         date: cli.date.clone(),
@@ -648,16 +766,30 @@ fn klayout2spef(cli: &Cli) {
             let geom_path = cli.geom_out.clone().or_else(|| {
                 cli.out.as_ref().map(|o| {
                     let p = std::path::Path::new(o);
-                    let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "out".into());
-                    p.with_file_name(format!("{stem}.emgeom")).to_string_lossy().into_owned()
+                    let stem = p
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "out".into());
+                    p.with_file_name(format!("{stem}.emgeom"))
+                        .to_string_lossy()
+                        .into_owned()
                 })
             });
             match geom_path {
                 Some(gp) => match std::fs::write(&gp, &res.geom) {
-                    Ok(_) => { if !cli.quiet { println!("wrote {gp}"); } }
-                    Err(e) => { eprintln!("error: {gp}: {e}"); exit(1); }
+                    Ok(_) => {
+                        if !cli.quiet {
+                            println!("wrote {gp}");
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("error: {gp}: {e}");
+                        exit(1);
+                    }
                 },
-                None => eprintln!("note: EM geom sidecar not written (stdout SPEF); pass --geom-out FILE"),
+                None => eprintln!(
+                    "note: EM geom sidecar not written (stdout SPEF); pass --geom-out FILE"
+                ),
             }
         }
         Err(e) => {
@@ -672,8 +804,12 @@ fn emit_klayout_events(res: &vyges_extract::klayout::KlResult) {
     use vyges_events::{Event, Severity};
     if res.n_nets == 0 {
         vyges_events::emit(
-            &Event::new("vyges-extract", Severity::Warn, "KLayout extraction produced 0 nets — check --top / --layermap".to_string())
-                .with_code("KLAYOUT-EXTRACT-EMPTY"),
+            &Event::new(
+                "vyges-extract",
+                Severity::Warn,
+                "KLayout extraction produced 0 nets — check --top / --layermap".to_string(),
+            )
+            .with_code("KLAYOUT-EXTRACT-EMPTY"),
         );
     }
     vyges_events::emit(

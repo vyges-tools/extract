@@ -14,12 +14,21 @@ use vyges_extract::engine::{extract, run_to_spef};
 use vyges_extract::job::ExtractJob;
 
 fn job() -> ExtractJob {
-    let p = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/bias_gen/bias_gen.ext");
+    let p = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/bias_gen/bias_gen.ext"
+    );
     ExtractJob::load(p).expect("load bias_gen job")
 }
 
-fn net<'a>(ex: &'a vyges_extract::engine::Extraction, name: &str) -> &'a vyges_extract::rc::NetParasitics {
-    ex.nets.iter().find(|n| n.name == name).unwrap_or_else(|| panic!("net {name} missing"))
+fn net<'a>(
+    ex: &'a vyges_extract::engine::Extraction,
+    name: &str,
+) -> &'a vyges_extract::rc::NetParasitics {
+    ex.nets
+        .iter()
+        .find(|n| n.name == name)
+        .unwrap_or_else(|| panic!("net {name} missing"))
 }
 
 #[test]
@@ -56,9 +65,19 @@ fn resistance_scales_with_wire_length() {
     let vsupply = net(&ex, "vsupply");
     // met3 is ~2.7x lower ohm/um than met1, yet 30um vs 20um and a via still make
     // the supply tap the more resistive net overall — i.e. R tracks geometry+layer.
-    assert!(vsupply.res_ohm > vbias.res_ohm, "supply R {} > bias R {}", vsupply.res_ohm, vbias.res_ohm);
+    assert!(
+        vsupply.res_ohm > vbias.res_ohm,
+        "supply R {} > bias R {}",
+        vsupply.res_ohm,
+        vbias.res_ohm
+    );
     // Wider/longer supply tap has the larger grounded cap.
-    assert!(vsupply.cap_ff > vbias.cap_ff, "supply C {} > bias C {}", vsupply.cap_ff, vbias.cap_ff);
+    assert!(
+        vsupply.cap_ff > vbias.cap_ff,
+        "supply C {} > bias C {}",
+        vsupply.cap_ff,
+        vbias.cap_ff
+    );
 
     // Direct length scaling on a single layer: vbias is exactly twice vsense's
     // met1 run (20um vs 10um), and met1's ohm/um contribution scales 1:1.
@@ -74,7 +93,10 @@ fn vias_add_resistance() {
     let vsense = net(&ex, "vsense");
     let wire_only = 10.0 * 0.125 + 10.0 * 0.125; // met1 + met2 runs, no via
     assert!(vsense.res_ohm > wire_only, "via must add R");
-    assert!((vsense.res_ohm - wire_only - 9.3).abs() < 1e-9, "via contributes exactly 9.3 ohm");
+    assert!(
+        (vsense.res_ohm - wire_only - 9.3).abs() < 1e-9,
+        "via contributes exactly 9.3 ohm"
+    );
 }
 
 #[test]
@@ -86,13 +108,19 @@ fn adjacent_nets_couple_sensitive_node_to_bias() {
     assert_eq!(ex.couplings.len(), 1, "one coupled pair (vbias <-> vsense)");
     let c = &ex.couplings[0];
     let pair = (c.a.as_str(), c.b.as_str());
-    assert!(pair == ("vbias", "vsense") || pair == ("vsense", "vbias"), "got {pair:?}");
+    assert!(
+        pair == ("vbias", "vsense") || pair == ("vsense", "vbias"),
+        "got {pair:?}"
+    );
     assert!(c.cap_ff > 0.0, "coupling cap > 0");
     // Cc = 0.050 fF/um * 10um overlap * (s_ref 0.14 / edge gap 0.86) = 0.081395 fF.
     assert!((c.cap_ff - 0.081395).abs() < 1e-6, "cc={}", c.cap_ff);
     // The wide supply tap (met3, y=25um) is >2um (the couple_cutoff) from the
     // signal nets, so it is correctly left uncoupled.
-    assert!(!ex.couplings.iter().any(|c| c.a == "vsupply" || c.b == "vsupply"));
+    assert!(!ex
+        .couplings
+        .iter()
+        .any(|c| c.a == "vsupply" || c.b == "vsupply"));
 }
 
 #[test]
@@ -106,7 +134,8 @@ fn analog_block_renders_spef() {
     // coupling listed once as a two-node *CAP entry (between the nets' real
     // representative nodes now that each net is a distributed tree).
     assert!(
-        spef.lines().any(|l| l.contains("0.081395") && l.matches('*').count() == 2),
+        spef.lines()
+            .any(|l| l.contains("0.081395") && l.matches('*').count() == 2),
         "coupling vbias-vsense two-node entry\n{spef}"
     );
 }

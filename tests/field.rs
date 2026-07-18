@@ -32,13 +32,22 @@ fn fringe_falls_faster_than_plate_at_wide_spacing() {
     // at wide spacing the ground-competition fall-off makes fringe < bare plate
     let plate = coupling_per_um(4.0, 0.35, 2.0);
     let fringe = coupling_per_um_fringe(4.0, 0.35, 1.0, 2.0);
-    assert!(fringe < plate, "fringe-corrected falls below plate at S>>H: {fringe} vs {plate}");
+    assert!(
+        fringe < plate,
+        "fringe-corrected falls below plate at S>>H: {fringe} vs {plate}"
+    );
     // taller layer (more H) competes less with ground -> couples more at the same S
     let lowH = coupling_per_um_fringe(4.0, 0.35, 0.5, 1.0);
     let hiH = coupling_per_um_fringe(4.0, 0.35, 3.0, 1.0);
-    assert!(hiH > lowH, "higher metal couples more (less ground shorting)");
+    assert!(
+        hiH > lowH,
+        "higher metal couples more (less ground shorting)"
+    );
     // H<=0 falls back to the plate form
-    assert!((coupling_per_um_fringe(4.0, 0.35, 0.0, 1.0) - coupling_per_um(4.0, 0.35, 1.0)).abs() < 1e-12);
+    assert!(
+        (coupling_per_um_fringe(4.0, 0.35, 0.0, 1.0) - coupling_per_um(4.0, 0.35, 1.0)).abs()
+            < 1e-12
+    );
 }
 
 // shield_k is applied in the engine (ground cap -= k·Cc_net); a focused rules-parse

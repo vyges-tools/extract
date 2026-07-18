@@ -31,7 +31,11 @@ pub struct PinResolver {
 impl PinResolver {
     /// Build from a parsed DEF plus optional cell-LEF / liberty paths. A `None`
     /// path is simply absent; a bad path is an error (fail loud on a wrong file).
-    pub fn new(def: &Def, cell_lef: Option<&str>, lib: Option<&str>) -> Result<PinResolver, String> {
+    pub fn new(
+        def: &Def,
+        cell_lef: Option<&str>,
+        lib: Option<&str>,
+    ) -> Result<PinResolver, String> {
         let lef = match cell_lef {
             Some(p) => Some(Lef::load(p).map_err(|e| format!("{p}: {e}"))?),
             None => None,
@@ -46,8 +50,16 @@ impl PinResolver {
     /// Build from already-parsed collateral (e.g. reusing a LEF/liberty the caller
     /// loaded, or in tests).
     pub fn from_loaded(def: &Def, lef: Option<Lef>, lib: Option<Lib>) -> PinResolver {
-        let inst_cell = def.comps.iter().map(|c| (c.name.clone(), c.cell.clone())).collect();
-        PinResolver { inst_cell, lef, lib }
+        let inst_cell = def
+            .comps
+            .iter()
+            .map(|c| (c.name.clone(), c.cell.clone()))
+            .collect();
+        PinResolver {
+            inst_cell,
+            lef,
+            lib,
+        }
     }
 
     /// True when hookup can add information (there are placed cells AND at least one
@@ -101,7 +113,12 @@ mod tests {
         let libp = d.join("vyges_hookup_test.lib");
         std::fs::write(&lefp, "MACRO INV_X1\n PIN A\n  DIRECTION INPUT ;\n END A\n PIN Y\n  DIRECTION OUTPUT ;\n END Y\nEND INV_X1\n").unwrap();
         std::fs::write(&libp, "library(t){\n capacitive_load_unit (1, ff);\n cell(INV_X1){\n  pin(A){direction:input; capacitance:1.5;}\n  pin(Y){direction:output;}\n }\n}\n").unwrap();
-        PinResolver::new(&def, Some(lefp.to_str().unwrap()), Some(libp.to_str().unwrap())).unwrap()
+        PinResolver::new(
+            &def,
+            Some(lefp.to_str().unwrap()),
+            Some(libp.to_str().unwrap()),
+        )
+        .unwrap()
     }
 
     #[test]

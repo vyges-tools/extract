@@ -6,7 +6,6 @@
 //! fit against golden patterns, that step shells out to the EDA environment,
 //! mirroring how `vyges-char` degrades when `ngspice` is absent.
 
-
 use rayon::prelude::*;
 
 use crate::coupling::{self, CouplingCap};
@@ -67,7 +66,8 @@ pub fn extract(job: &ExtractJob) -> Result<Extraction, ExtractError> {
             }
         };
     }
-    let d: Def = def::load(&job.resolve(&job.def)).map_err(|e| ExtractError::Parse(e.to_string()))?;
+    let d: Def =
+        def::load(&job.resolve(&job.def)).map_err(|e| ExtractError::Parse(e.to_string()))?;
     lap!("parse DEF");
     let r: RcRules =
         RcRules::load(&job.resolve(&job.rules)).map_err(|e| ExtractError::Parse(e.to_string()))?;
@@ -83,12 +83,17 @@ pub fn extract(job: &ExtractJob) -> Result<Extraction, ExtractError> {
     let mut nets = d
         .nets
         .par_iter()
-        .map(|n| rc::extract_net(n, &r, &lef.widths).map_err(|e| ExtractError::Parse(e.to_string())))
+        .map(|n| {
+            rc::extract_net(n, &r, &lef.widths).map_err(|e| ExtractError::Parse(e.to_string()))
+        })
         .collect::<Result<Vec<_>, _>>()?;
     lap!("per-net RC");
     // Distributed RC network per net (from routing geometry); None -> lumped star.
-    let trees: Vec<Option<RcNetwork>> =
-        d.nets.par_iter().map(|n| tree::build_network(n, &r, &lef.widths)).collect();
+    let trees: Vec<Option<RcNetwork>> = d
+        .nets
+        .par_iter()
+        .map(|n| tree::build_network(n, &r, &lef.widths))
+        .collect();
     lap!("per-net trees");
     let couplings = coupling::extract_coupling(&d.nets, &r, &lef.widths, &lef.thicknesses);
     lap!("coupling");
@@ -107,7 +112,11 @@ pub fn extract(job: &ExtractJob) -> Result<Extraction, ExtractError> {
             }
         }
     }
-    Ok(Extraction { nets, trees, couplings })
+    Ok(Extraction {
+        nets,
+        trees,
+        couplings,
+    })
 }
 
 /// Full run: extract and render a `.spef`.

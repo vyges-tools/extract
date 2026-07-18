@@ -27,10 +27,16 @@ use vyges_extract::def::{DefNet, Segment};
 use vyges_extract::rules::RcRules;
 
 fn env_usize(key: &str, default: usize) -> usize {
-    std::env::var(key).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(default)
+    std::env::var(key)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(default)
 }
 fn env_f64(key: &str, default: f64) -> f64 {
-    std::env::var(key).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(default)
+    std::env::var(key)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(default)
 }
 
 #[test]
@@ -51,7 +57,13 @@ fn coupling_dense_block() {
         .map(|i| DefNet {
             name: format!("w{i}"),
             pins: vec![],
-            segments: vec![Segment::wire("met1", 0.0, i as f64 * pitch, len, i as f64 * pitch)],
+            segments: vec![Segment::wire(
+                "met1",
+                0.0,
+                i as f64 * pitch,
+                len,
+                i as f64 * pitch,
+            )],
             vias: 0,
         })
         .collect();

@@ -59,14 +59,19 @@ impl ExtractJob {
             kv.insert(k.trim().to_lowercase(), v.trim().to_string());
         }
         let get = |k: &str| -> Result<String, JobError> {
-            kv.get(k).cloned().ok_or_else(|| JobError(format!("missing key: {k}")))
+            kv.get(k)
+                .cloned()
+                .ok_or_else(|| JobError(format!("missing key: {k}")))
         };
         let job = ExtractJob {
             design: get("design")?,
             def: get("def")?,
             rules: kv.get("rules").cloned().unwrap_or_default(),
             lef: kv.get("lef").filter(|s| !s.is_empty()).cloned(),
-            corner: kv.get("corner").cloned().unwrap_or_else(|| "typical".into()),
+            corner: kv
+                .get("corner")
+                .cloned()
+                .unwrap_or_else(|| "typical".into()),
             temp: kv.get("temp").and_then(|t| t.parse().ok()).unwrap_or(25.0),
             base_dir: base_dir.to_string(),
         };
@@ -76,7 +81,10 @@ impl ExtractJob {
 
     pub fn load(path: &str) -> Result<ExtractJob, JobError> {
         let text = std::fs::read_to_string(path).map_err(|e| JobError(format!("{path}: {e}")))?;
-        let base = Path::new(path).parent().and_then(|p| p.to_str()).unwrap_or(".");
+        let base = Path::new(path)
+            .parent()
+            .and_then(|p| p.to_str())
+            .unwrap_or(".");
         ExtractJob::parse(&text, base)
     }
 
@@ -85,7 +93,10 @@ impl ExtractJob {
         if Path::new(rel).is_absolute() || self.base_dir.is_empty() {
             rel.to_string()
         } else {
-            Path::new(&self.base_dir).join(rel).to_string_lossy().into_owned()
+            Path::new(&self.base_dir)
+                .join(rel)
+                .to_string_lossy()
+                .into_owned()
         }
     }
 

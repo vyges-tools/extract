@@ -30,7 +30,11 @@ pub struct Units {
 
 impl Default for Units {
     fn default() -> Self {
-        Units { time: "1 PS".into(), cap: "1 FF".into(), res: "1 OHM".into() }
+        Units {
+            time: "1 PS".into(),
+            cap: "1 FF".into(),
+            res: "1 OHM".into(),
+        }
     }
 }
 
@@ -42,7 +46,10 @@ struct NameMap {
 
 impl NameMap {
     fn new() -> NameMap {
-        NameMap { ids: BTreeMap::new(), order: Vec::new() }
+        NameMap {
+            ids: BTreeMap::new(),
+            order: Vec::new(),
+        }
     }
     fn intern(&mut self, name: &str) -> usize {
         if let Some(&id) = self.ids.get(name) {
@@ -97,7 +104,10 @@ pub fn render_json(design: &str, nets: &[NetParasitics], couplings: &[CouplingCa
         if i > 0 {
             s.push(',');
         }
-        s.push_str(&format!("{{\"a\":{:?},\"b\":{:?},\"cap_ff\":{:.6}}}", c.a, c.b, c.cap_ff));
+        s.push_str(&format!(
+            "{{\"a\":{:?},\"b\":{:?},\"cap_ff\":{:.6}}}",
+            c.a, c.b, c.cap_ff
+        ));
     }
     s.push_str("]}\n");
     s
@@ -144,7 +154,12 @@ pub fn render_distributed(
     let net_ids: Vec<usize> = nets.iter().map(|n| nm.intern(&n.name)).collect();
     let pin_ids: Vec<Vec<(usize, String)>> = nets
         .iter()
-        .map(|net| net.pins.iter().map(|(inst, pin)| (nm.intern(inst), pin.clone())).collect())
+        .map(|net| {
+            net.pins
+                .iter()
+                .map(|(inst, pin)| (nm.intern(inst), pin.clone()))
+                .collect()
+        })
         .collect();
 
     // The node each net presents to a coupling neighbour: the driver vertex when a
@@ -160,8 +175,11 @@ pub fn render_distributed(
             None => format!("{}", net_ids[n]),      // star root
         }
     };
-    let id_of: BTreeMap<&str, usize> =
-        nets.iter().enumerate().map(|(i, n)| (n.name.as_str(), i)).collect();
+    let id_of: BTreeMap<&str, usize> = nets
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.name.as_str(), i))
+        .collect();
 
     // Per-net coupling totals (both endpoints) + the list of couplings to emit
     // under each net (keyed by net A).
@@ -204,12 +222,18 @@ pub fn render_distributed(
             .pins
             .iter()
             .map(|(inst, pin)| {
-                resolver.map(|r| r.resolve(inst, pin)).unwrap_or((vyges_loom::lef::PinDir::Unknown, 0.0))
+                resolver
+                    .map(|r| r.resolve(inst, pin))
+                    .unwrap_or((vyges_loom::lef::PinDir::Unknown, 0.0))
             })
             .collect();
         let cin_sum: f64 = hk.iter().map(|(_, c)| *c).sum();
         // total net cap = grounded wire + coupling + per-load pin Cin
-        s.push_str(&format!("*D_NET *{} {}\n", nid, val(net.cap_ff + cpl + cin_sum)));
+        s.push_str(&format!(
+            "*D_NET *{} {}\n",
+            nid,
+            val(net.cap_ff + cpl + cin_sum)
+        ));
 
         s.push_str("*CONN\n");
         for (k, (iid, pin)) in pin_ids[n].iter().enumerate() {
@@ -250,9 +274,14 @@ pub fn render_distributed(
             let rep_a = rep_label(n);
             for c in list {
                 ci += 1;
-                let rep_b = id_of.get(c.b.as_str()).map(|&j| rep_label(j)).unwrap_or_else(|| {
-                    nm.id(&c.b).map(|b| b.to_string()).unwrap_or_else(|| nid.to_string())
-                });
+                let rep_b = id_of
+                    .get(c.b.as_str())
+                    .map(|&j| rep_label(j))
+                    .unwrap_or_else(|| {
+                        nm.id(&c.b)
+                            .map(|b| b.to_string())
+                            .unwrap_or_else(|| nid.to_string())
+                    });
                 s.push_str(&format!("{ci} *{rep_a} *{rep_b} {}\n", val(c.cap_ff)));
             }
         }
@@ -279,8 +308,16 @@ fn emit_tree(
     cap_ff: f64,
     res_ohm: f64,
 ) -> (CapLines, ResLines) {
-    let scale_c = if t.raw_cap > 0.0 { cap_ff / t.raw_cap } else { 0.0 };
-    let scale_r = if t.raw_res > 0.0 { res_ohm / t.raw_res } else { 0.0 };
+    let scale_c = if t.raw_cap > 0.0 {
+        cap_ff / t.raw_cap
+    } else {
+        0.0
+    };
+    let scale_r = if t.raw_res > 0.0 {
+        res_ohm / t.raw_res
+    } else {
+        0.0
+    };
     let label = |i: usize| -> String {
         match &t.nodes[i].pin {
             Some((inst, pin)) => format!("{}:{}", nm.id(inst).unwrap_or(0), pin),
@@ -297,20 +334,18 @@ fn emit_tree(
         }
         caps.push((label(i), c));
     }
-    let res_lines: Vec<(String, String, f64)> =
-        t.edges.iter().map(|e| (label(e.a), label(e.b), e.res_ohm * scale_r)).collect();
+    let res_lines: Vec<(String, String, f64)> = t
+        .edges
+        .iter()
+        .map(|e| (label(e.a), label(e.b), e.res_ohm * scale_r))
+        .collect();
     (caps, res_lines)
 }
 
 /// Lumped star emission (the geometry-free fallback): driver near-half + per-sink
 /// far-half branches off the net-id root. Reduces to a pi for one sink and a lump
 /// with no series R.
-fn emit_star(
-    nid: usize,
-    pins: &[(usize, String)],
-    g: f64,
-    r: f64,
-) -> (CapLines, ResLines) {
+fn emit_star(nid: usize, pins: &[(usize, String)], g: f64, r: f64) -> (CapLines, ResLines) {
     let mut caps: Vec<(String, f64)> = Vec::new();
     let mut res_lines: Vec<(String, String, f64)> = Vec::new();
     let node = |iid: usize, pin: &str| format!("{iid}:{pin}");

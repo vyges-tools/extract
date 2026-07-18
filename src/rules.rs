@@ -32,8 +32,8 @@ pub struct LayerRc {
 #[derive(Debug, Clone)]
 pub struct RcRules {
     pub layers: BTreeMap<String, LayerRc>,
-    pub via_res: f64,        // default ohm per via cut
-    pub couple_cutoff: f64,  // um — ignore lateral coupling beyond this gap
+    pub via_res: f64,       // default ohm per via cut
+    pub couple_cutoff: f64, // um — ignore lateral coupling beyond this gap
     /// Effective permittivity for the field-kernel coupling (`eps_r <v>`). When > 0
     /// and a metal thickness is known, coupling is `eps_r·eps0·T/gap` (the geometry-
     /// derived M5 model) instead of the per-layer `coupling` coefficient.
@@ -88,7 +88,8 @@ fn strip_comment(line: &str) -> &str {
 }
 
 fn num(tok: &str, what: &str) -> Result<f64, RulesError> {
-    tok.parse::<f64>().map_err(|_| RulesError(format!("{what}: not a number: {tok:?}")))
+    tok.parse::<f64>()
+        .map_err(|_| RulesError(format!("{what}: not a number: {tok:?}")))
 }
 
 impl RcRules {
@@ -111,14 +112,23 @@ impl RcRules {
                 let cap_per_um = (l.cpersqdist * w + 2.0 * l.edge_cap) * 1000.0;
                 layers.insert(
                     name.clone(),
-                    LayerRc { res_per_um: l.rpersq, cap_per_um, coupling_per_um: 0.0, s_ref: 0.0 },
+                    LayerRc {
+                        res_per_um: l.rpersq,
+                        cap_per_um,
+                        coupling_per_um: 0.0,
+                        s_ref: 0.0,
+                    },
                 );
             } else if l.cut_res > 0.0 {
                 cut_res.push(l.cut_res);
             }
         }
         cut_res.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let via_res = if cut_res.is_empty() { 0.0 } else { cut_res[cut_res.len() / 2] };
+        let via_res = if cut_res.is_empty() {
+            0.0
+        } else {
+            cut_res[cut_res.len() / 2]
+        };
         RcRules {
             layers,
             via_res,
@@ -139,8 +149,11 @@ impl RcRules {
     /// capacitance. The captable indexes layers by stack position (`Metal N`), mapped
     /// to a name via `routing_order` (the LEF stack).
     pub fn from_captable(routing_order: &[String], rcx: &str) -> RcRules {
-        let (mut res, mut over, mut under): (BTreeMap<usize, f64>, BTreeMap<usize, f64>, BTreeMap<usize, f64>) =
-            Default::default();
+        let (mut res, mut over, mut under): (
+            BTreeMap<usize, f64>,
+            BTreeMap<usize, f64>,
+            BTreeMap<usize, f64>,
+        ) = Default::default();
         let mut block: Option<(usize, u8)> = None; // (metal index, 0=res 1=over 2=under)
         let mut taken = false;
         for line in rcx.lines() {
@@ -157,7 +170,11 @@ impl RcRules {
                     block = match kind {
                         // RESOVER/OVER: only the base `0` context; UNDER: the first
                         // (nearest-upper) block for this metal.
-                        Some(kd) if (kd != 2 && t[3] == "0") || (kd == 2 && !under.contains_key(&k)) => Some((k, kd)),
+                        Some(kd)
+                            if (kd != 2 && t[3] == "0") || (kd == 2 && !under.contains_key(&k)) =>
+                        {
+                            Some((k, kd))
+                        }
                         _ => None,
                     };
                     taken = false;
@@ -185,8 +202,17 @@ impl RcRules {
         let mut layers = BTreeMap::new();
         for (&k, &r) in &res {
             if let Some(name) = routing_order.get(k.wrapping_sub(1)) {
-                let c = over.get(&k).copied().unwrap_or(0.0) + under.get(&k).copied().unwrap_or(0.0);
-                layers.insert(name.clone(), LayerRc { res_per_um: r * 1000.0, cap_per_um: c, coupling_per_um: 0.0, s_ref: 0.0 });
+                let c =
+                    over.get(&k).copied().unwrap_or(0.0) + under.get(&k).copied().unwrap_or(0.0);
+                layers.insert(
+                    name.clone(),
+                    LayerRc {
+                        res_per_um: r * 1000.0,
+                        cap_per_um: c,
+                        coupling_per_um: 0.0,
+                        s_ref: 0.0,
+                    },
+                );
             }
         }
         RcRules {
@@ -209,7 +235,10 @@ impl RcRules {
              # layer  res(ohm/um)  cap(fF/um)  coupling(fF/um)  s_ref(um)\n",
         );
         for (name, l) in &self.layers {
-            s.push_str(&format!("{} {} {} {} {}\n", name, l.res_per_um, l.cap_per_um, l.coupling_per_um, l.s_ref));
+            s.push_str(&format!(
+                "{} {} {} {} {}\n",
+                name, l.res_per_um, l.cap_per_um, l.coupling_per_um, l.s_ref
+            ));
         }
         s.push_str(&format!("via {}\n", self.via_res));
         s.push_str(&format!("couple_cutoff {}\n", self.couple_cutoff));
@@ -263,7 +292,10 @@ impl RcRules {
                 if layer.is_empty() {
                     return Err(RulesError("rsheet needs `layer <ohm/square>`".into()));
                 }
-                rsheet.insert(layer.to_string(), num(toks.get(2).copied().unwrap_or(""), "rsheet")?);
+                rsheet.insert(
+                    layer.to_string(),
+                    num(toks.get(2).copied().unwrap_or(""), "rsheet")?,
+                );
                 continue;
             }
             if toks[0].eq_ignore_ascii_case("height") {
@@ -271,7 +303,10 @@ impl RcRules {
                 if layer.is_empty() {
                     return Err(RulesError("height needs `layer <um>`".into()));
                 }
-                heights.insert(layer.to_string(), num(toks.get(2).copied().unwrap_or(""), "height")?);
+                heights.insert(
+                    layer.to_string(),
+                    num(toks.get(2).copied().unwrap_or(""), "height")?,
+                );
                 continue;
             }
             if toks[0].eq_ignore_ascii_case("interlayer") {
@@ -307,7 +342,16 @@ impl RcRules {
         if layers.is_empty() {
             return Err(RulesError("no layers defined".into()));
         }
-        Ok(RcRules { layers, via_res, couple_cutoff, eps_r, shield_k, heights, interlayer, rsheet })
+        Ok(RcRules {
+            layers,
+            via_res,
+            couple_cutoff,
+            eps_r,
+            shield_k,
+            heights,
+            interlayer,
+            rsheet,
+        })
     }
 
     pub fn load(path: &str) -> Result<RcRules, RulesError> {
