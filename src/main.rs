@@ -496,6 +496,10 @@ fn main() {
     }
   },
   "artifacts": [ { "role": "spef", "from_arg": "out" } ],
+  "assertion": {
+    "id": "parasitic-extract",
+    "not_applicable": true
+  },
   "consumes": ["def", "gds"]
 }
 "#;
