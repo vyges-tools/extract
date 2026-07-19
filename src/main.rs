@@ -102,6 +102,8 @@ struct Cli {
     captable: Option<String>,
     refresh: bool,
     allow_incomplete_rc: bool,
+    /// Set when this run proceeded over an incomplete RC deck, with the reason.
+    incomplete_rc_note: Option<String>,
     // klayout2spef front end
     gds: Option<String>,
     top: Option<String>,
@@ -397,6 +399,20 @@ fn write_out(text: &str, cli: &Cli) {
     }
 }
 
+/// Insert a `coverage` block at the head of a JSON object payload.
+fn splice_coverage(json: &str, note: &str) -> String {
+    let Some(rest) = json.trim_start().strip_prefix('{') else {
+        return json.to_string();
+    };
+    let esc = note.replace('\\', "\\\\").replace('"', "\\\"");
+    let sep = if rest.trim_start().starts_with('}') {
+        ""
+    } else {
+        ","
+    };
+    format!("{{\"coverage\":{{\"complete\":false,\"note\":\"{esc}\"}}{sep}{rest}")
+}
+
 fn render(
     design: &str,
     nets: &[NetParasitics],
@@ -406,7 +422,16 @@ fn render(
     cli: &Cli,
 ) -> String {
     if cli.json {
-        spef::render_json(design, nets, couplings)
+        // Splice the coverage caveat (#72) into the summary when the RC deck this run used
+        // was incomplete. The extraction establishes no pass/fail claim, so this changes no
+        // verdict -- but a downstream timer consuming these parasitics has no other way to
+        // learn they are understated, and silently handing it confident-looking zeros is the
+        // failure this whole area keeps producing.
+        let j = spef::render_json(design, nets, couplings);
+        match &cli.incomplete_rc_note {
+            Some(note) => splice_coverage(&j, note),
+            None => j,
+        }
     } else {
         spef::render_distributed(
             design,
@@ -558,7 +583,7 @@ fn main() {
         return;
     }
 
-    let cli = parse_cli(&args);
+    let mut cli = parse_cli(&args);
 
     // Size the rayon thread pool once, before any parallel extraction. Default (flag absent)
     // lets rayon use all available cores; `-j N` caps it (`-j 1` = serial).
@@ -681,6 +706,20 @@ fn main() {
             // hand back confident numbers.
             match vyges_extract::rules::RcRules::load(&job.rules) {
                 Ok(r) => {
+                    let (no_r, no_c) = r.incomplete();
+                    if !no_r.is_empty() || !no_c.is_empty() {
+                        // Record it whether or not the run proceeds. If it does proceed (via
+                        // the override), the resulting parasitics are understated and the
+                        // caveat has to travel with them -- a downstream timer has no other
+                        // way to learn it (#72).
+                        cli.incomplete_rc_note = Some(format!(
+                            "RC deck {} has {} layer(s) with no resistance and {} with no \
+                             capacitance; extracted parasitics are understated",
+                            job.rules,
+                            no_r.len(),
+                            no_c.len()
+                        ));
+                    }
                     if warn_if_incomplete(&r) && !cli.allow_incomplete_rc {
                         eprintln!(
                             "error: {} has layers with no R and/or no C, so extraction would \
