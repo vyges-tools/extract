@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Correlation against a sign-off OpenRCX SPEF on a routed sky130 block.
+#
+# Separate from ci.yml on purpose. `ci.yml` runs on every push and compares the engine against
+# ITSELF — fixtures assert numbers the engine produced, which cannot catch a coefficient that was
+# never right or a model term silently switched off. This job compares against an artifact from
+# OUTSIDE: the parasitics the design's own OpenLane run produced with the foundry-reference
+# extractor. That comparison is what has actually found defects in this engine.
+#
+# The block is `fft_ctrl_tlul`, chosen because it is the one HELD OUT of every deck fit, so this
+# measures whether the calibration generalises rather than reciting the fit set back.
+#
+# Not on `push`: it fetches ~50 MB of DEF and SPEF plus a PDK slice, and the reference side is a
+# frozen artifact, so the result only moves when the engine or the deck does. Monthly catches
+# drift; dispatch covers "I touched the coupling model and want to know now".
+name: correlation (sky130 block)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 6 1 * *" # 06:41 UTC on the 1st of each month
+
+concurrency:
+  group: correlation-extract-sky130
+  cancel-in-progress: true
+
+# Frozen, so a moving PDK cannot make a real regression and a library update look the same.
+env:
+  PDK_RELEASE: sky130-8810d893525d268924398a7d0837ef8c1b28d475
+
+jobs:
+  correlate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the design (sparse)
+        run: |
+          git clone --filter=blob:none --sparse --depth 1 \
+            https://github.com/vyges/vyges-edge-sensor-soc.git design
+          cd design
+          # --no-cone because cone mode only accepts DIRECTORIES, and def/ carries every block
+          # in the SoC. Two files, named exactly.
+          git sparse-checkout set --no-cone \
+            /def/fft_ctrl_tlul.def \
+            /spef/fft_ctrl_tlul.nom.spef
+          ls -lh def/fft_ctrl_tlul.def spef/fft_ctrl_tlul.nom.spef
+
+      - name: Cache the PDK slice
+        id: pdk-cache
+        uses: actions/cache@v4
+        with:
+          path: pdk
+          key: sky130-fd-sc-hd-${{ env.PDK_RELEASE }}
+
+      - name: Download the sky130 standard-cell library
+        if: steps.pdk-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p pdk && cd pdk
+          curl -sSfL -o sc_hd.tar.zst \
+            "https://github.com/vyges-tools/pdk-releases/releases/download/${PDK_RELEASE}/sky130_fd_sc_hd.tar.zst"
+          sudo apt-get update -qq && sudo apt-get install -y -qq zstd
+          tar --use-compress-program=unzstd -xf sc_hd.tar.zst
+          rm sc_hd.tar.zst
+
+      # The tech LEF carries the routing widths, and a wrong width is not a small error here —
+      # it is what once inflated coupling by 2.5x, so failing loudly beats extracting with
+      # defaults nobody chose.
+      - name: Locate the technology LEF
+        run: |
+          tlef=$(find pdk -name 'sky130_fd_sc_hd__nom.tlef' -o -name 'sky130_fd_sc_hd.tlef' | head -1)
+          test -n "$tlef" || { echo "::error::no technology LEF in the PDK slice"; exit 1; }
+          echo "PDK_TLEF=$PWD/$tlef" >> "$GITHUB_ENV"
+          ls -lh "$tlef"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Correlate
+        env:
+          DESIGN: ${{ github.workspace }}/design
+        run: |
+          set -o pipefail
+          ./scripts/correlate-sky130.sh 2>&1 | tee correlation.txt
+
+      # The numbers are worth reading even when green — drift within the window is the early
+      # warning, and a summary means seeing it does not require opening the log.
+      - name: Publish the numbers to the run summary
+        if: always()
+        run: |
+          {
+            echo '## vyges-extract vs sign-off OpenRCX — routed sky130 block (held out of the fit)'
+            echo '```text'
+            cat correlation.txt 2>/dev/null || echo 'the correlation step produced no output'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

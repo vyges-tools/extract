@@ -230,6 +230,16 @@ def main():
     if zero_ref_c:
         print(f"  ({zero_ref_c:,} nets where the reference has no coupling and we report some)")
 
+    # One machine-readable line, so a CI gate greps a contract instead of scraping a table
+    # whose column layout is free to change.
+    print(
+        f"\nRATIO ground={sum(og.get(n,0.0) for n in common)/max(sum(rg.get(n,0.0) for n in common),1e-9):.4f}"
+        f" coupling={sum(oc.get(n,0.0) for n in common)/max(sum(rc.get(n,0.0) for n in common),1e-9):.4f}"
+        f" total={so/max(sr,1e-9):.4f}"
+        f" ground_median={pct(gr,50):.4f} coupling_median={pct(cr,50):.4f}"
+        f" nets={len(common)}"
+    )
+
     if a.def_path:
         layers = net_layers(a.def_path)
         top = {}
