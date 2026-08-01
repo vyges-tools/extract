@@ -4,8 +4,9 @@
 - **Status:** harness built; OpenRCX now **reads our SPEF completely**, which it could not do at
   all before. **No numeric correlation is obtainable this way** — `diff_spef.out` is unreachable
   in OpenROAD as pinned, verified in source. What the exercise *did* produce: **eight** writer
-  defects, all fixed, and a real extraction bug — **7 % of nets emit an RC network in more than
-  one piece**.
+  defects, all fixed, and — via its topology checks — **four extraction/reader defects that made
+  7 % of nets emit an RC network in more than one piece**, now all at zero. Accuracy against the
+  sign-off SPEF is a separate, open question; see the last section.
 - **Companion:** [`openrcx-counter.md`](openrcx-counter.md) — the per-layer cap calibration this
   was meant to generalise.
 
@@ -160,36 +161,93 @@ The comparator is then ours again — but both sides' *values* come from named t
 comparison is a ratio anyone can re-derive, which is a weaker claim than `diff_spef` promised and
 a defensible one.
 
-## ⚠️ What the reader does say about our RC — 7 % of nets are not one network
+## ✅ What the reader said about our RC, and what fixing it took
 
-`diff_spef` cannot give values, but its topology checks run, and they found something real:
+`diff_spef` cannot give values, but its topology checks run, and they found something real.
+Four defects, in three different files, each only visible because the incumbent read our output:
 
-| | count | of 14 286 nets |
-| --- | ---: | --- |
-| `RCX-0272` RC **disconnected** | **1 001** | 7.0 % |
-| `RCX-0374` RC **inconsistency** | 630 | 4.4 % |
-| `RCX-0292` **looped** spef RC | 23 | 0.2 % |
+| | at the start | after |
+| --- | ---: | ---: |
+| `RCX-0272` RC **disconnected** | **1 001** (7.0 %) | **0** |
+| `RCX-0374` RC **inconsistency** | 630 (4.4 %) | **0** |
+| `RCX-0292` **looped** spef RC | 23 | **0** |
 
-All 1 001 are internal `_NNNNN_` nets, not ports, and they are multi-pin: the first three carry
-4, 7 and 7 pins. Taking `_00768_` (4 pins, 19 grounded-cap nodes, 16 resistors) and running
-union-find over its own `*RES` edges:
+### 1. Wires that meet in the middle were never joined
 
-```text
-3 connected components:
-   15 nodes   *15828:Y is NOT among them          <- driver + 2 sinks
-    3 nodes   *15827:A, *15828:Y                  <- the driver, stranded with one sink
-    4 nodes   *769:15 *769:16 *769:17 *769:18     <- internal nodes reachable from nothing
-```
+All 1 001 disconnected nets were internal multi-pin nets. Union-find over `_00768_`'s own
+`*RES` edges (4 pins, 19 nodes, 16 resistors) gave **three components** — the driver stranded
+with one sink, two sinks in another graph, four internal nodes reachable from nothing. A timer
+reading that sees no interconnect delay to those pins at all.
 
-The network we emit is **three graphs, not one**. Two sinks have no resistive path to the driver
-at all, and four internal nodes float free. A timer reading this sees either zero interconnect
-delay to those pins or an unsolvable network — so this is not a reporting nicety, it is wrong
-parasitics on one net in fourteen.
+The tree builder interned a node at each segment **endpoint**. Real routing constantly joins a
+wire at a point that is an endpoint of one and the *interior* of the other:
 
-This is a `tree::build_network` defect (routing segments not being stitched through the vias or
-touch-points that join them), it is squarely extraction work rather than harness work, and it is
-the next thing to fix. It is also the one finding here that a value comparison would have *hidden*
-— per-net totals can be perfectly correlated while the network they describe is in pieces.
+- **a via lands mid-span** — `NEW met1 ( 230690 1040230 ) M1M2_PR` connects to a met2 run from
+  y=1035470 to y=1043460, 4.76 µm along it, an endpoint of nothing;
+- **a same-layer T-junction**, where a branch taps a spine between its ends.
+
+Segments are now split at those junctions, in integer nanometres so "do these meet" is an exact
+comparison. Sub-lengths sum to the original and both cap-per-µm and `wire_res` are linear in
+length, so **`raw_cap`/`raw_res` are unchanged and the deck calibration is untouched** — verified
+on the block, where the extracted total did not move by a femtofarad.
+
+Doing that needed a DEF-reader change: vias were kept as a **count**, and the location is the
+whole point (`vyges-tools/loom 07aa87a`).
+
+### 2. …and then the fix invented connectivity, which was worse
+
+Loops went **23 → 70**. Splitting puts nodes wherever *another* layer's via cut through, and the
+via pass chained every layer present at a location — so a met2→met3 via at a point the met1 wire
+merely ran past also shorted met1 to met2, and where those two were legitimately joined further
+along, the net came back with a loop in it.
+
+The first fix for that was also wrong: "a via is declared on the lower of the two layers it
+joins" is true of this block and **false in general** — `examples/counter` writes it the other
+way round, and DEF permits both. Only the **LEF `VIA` block** says which two layers a via joins,
+so that is the authority now (`vyges-tools/loom 21cfe0b`, which also stops a VIA block's own
+`LAYER` lines being read as tech layers). Without a LEF, the declared layer plus the one adjacent
+layer present settles every two-layer case; where a layer sits both above and below, the question
+is genuinely open and **we decline** — the net degrades to a star, counted and visible, rather
+than being wired up wrong and looking fine. **70 → 11.**
+
+### 3. `RECT` drew a wire to the origin
+
+All 11 remaining looped nets contained a `RECT`. `RECT ( 0 -150 390 150 )` is a via-landing patch
+stated as an **offset rectangle** from the preceding point. The reader skipped the keyword but not
+its body, so the next group was read as a coordinate — drawing a wire from the routing point to
+(0.000, -0.150). Two of those in one net meet down there and tie distant parts of it together.
+**791 of them in this block** (`vyges-tools/loom 50540e6`). **11 → 0.**
+
+That one moved the numbers: **the block's extracted capacitance fell 35 %** (294 837 → 190 991 fF),
+because those phantom wires were ~1 mm long. Any figure previously taken from a block containing
+`RECT` was inflated. The calibration block has none, so [`openrcx-counter.md`](openrcx-counter.md)
+stands.
+
+### A backstop, so the invariant holds unconditionally
+
+If a network still will not resolve into one piece, the builder says so and the caller emits the
+lumped star, which is connected by construction — coarse and valid beats detailed and invalid. It
+is counted and reported as `EXTRACT-RC-DISCONNECTED`, not folded into the same silence as "this
+net has no routing". On this block it fires zero times.
+
+## ⚠️ Now the accuracy question, which is open
+
+With the topology right, a first like-for-like comparison against the design's **own sign-off
+OpenRCX SPEF** (`fft_ctrl_tlul.nom.spef`, `*C_UNIT 1 PF` — mind the units) on the `*D_NET`
+convention (coupling counted on both nets, no pin cap):
+
+| | fF |
+| --- | ---: |
+| vyges-extract — ground 83 071 + 2× coupling 107 920 | 298 910 |
+| OpenRCX sign-off | 105 696 |
+| **ratio** | **2.83×** |
+
+**This is an observation, not a correlation result, and 2.83 should not be quoted as one.**
+Coupling is the larger half of our total and the dominant suspect; the deck was fitted for total
+*ground* cap on a 50-net block that never routes above met3, and met4/met5 capacitance here is
+still an explicitly uncalibrated placeholder. An over-estimate is what
+[`openrcx-counter.md`](openrcx-counter.md)'s stated bounds predict. Closing it is deck-calibration
+work on a **set** of blocks, which is the next piece.
 
 ## (Historical) The blocker, when it was still unexplained: `diff_spef` segfaults reading our file
 
@@ -225,18 +283,16 @@ sky130 block is the missing piece** — for this and for any future OpenROAD-sid
 
 ### Next, in order
 
-1. **Fix `tree::build_network`** so a net's segments form one connected graph. The union-find
-   check above is the test: run it over every `*D_NET` and assert one component. That belongs in
-   the suite, not in a script — it is checkable entirely from our own output, which is why its
-   absence is on us and not on the harness.
-2. Re-run this harness. `RCX-0272`/`RCX-0374`/`RCX-0292` going to zero is a real pass/fail gate
-   even though no number comes with it.
-3. **Then** get a number via OpenRCX `write_spef` + per-net ratio, and extend the deck
-   calibration to a **set** of blocks — what `openrcx-counter.md` says is needed and what
-   met4/met5 concretely require.
+1. **Deck calibration on a set of blocks.** The topology is right; the magnitudes are 2.83× on
+   this block with coupling as the dominant suspect. This is what `openrcx-counter.md` has said
+   was needed since it was written, and it is now the only thing between here and a number.
+2. Keep `diff_spef` as the **topology gate**. `RCX-0272`/`RCX-0374`/`RCX-0292` at zero is a real
+   pass/fail even though no value comes with it, and it is cheap to re-run.
+3. Port the union-find check into the suite as a per-`*D_NET` assertion so a regression is caught
+   without needing OpenROAD at all. `tree::components` is already the shared implementation.
 
 ### Worth reporting upstream
 
-Two things, with a reproducer each, and they are related: `diff_spef` is unreachable-by-design at
-its own documented output *and* has no test, which is exactly the condition in which the
-null-dereference on an unresolved name survived.
+`diff_spef` is unreachable-by-design at its own documented output *and* has no test — which is
+exactly the condition in which the null-dereference on an unresolved name survived. Reproducer in
+hand for both.
