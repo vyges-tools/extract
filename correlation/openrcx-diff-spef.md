@@ -72,7 +72,50 @@ say so.
 `5 used by the routing, 3 with RC rules` *one line before* the failure. Its first outing on a
 real design predicted the failure it was written to make visible.
 
-## ⛔ The blocker: `diff_spef` segfaults reading our file
+## ✅ The segfault is gone — and it was ours (2026-08-01, later)
+
+Isolated by bisecting **our own SPEF** rather than finding a smaller design. `diff_spef` does not
+require the file to cover every net, so a prefix is a valid SPEF; and OpenRCX's extraction can be
+run **once** and frozen with `write_db`, after which each bisect step is a `read_db` instead of a
+4-second re-extraction of a 240 000-instance design. Binary search over 14 286 records, ~14 runs.
+
+That named the trigger in one pass, and then again after each fix. Four more defects, all ours:
+
+| # | Defect | Why it was invisible to us |
+| --- | --- | --- |
+| 4 | The DEF `PIN` placeholder was still **interned into `*NAME_MAP`** after ports moved to `*P` | our reader never resolves name-map entries as instances; OpenRCX does |
+| 5 | **Coupling entries named a port as an instance pin** (`*<id>:tl_i[74]`) | a dangling reference our reader tolerates |
+| 6 | Node labels **prefixed `*` on a port** — which marks a *name-map reference*, so the reader looked up an id called `tl_i[74]` | ditto |
+| 7 | **No `*PORTS` section**, and it must come **after** `*NAME_MAP` — a reader meeting it first concludes there is no name map at all | we never read our own ports back |
+
+**Defect 4 was masking the crash.** It produced a clean `Unmatched spef and db` error that stopped
+OpenRCX before it reached the null dereference; fixing our bug is what exposed the segfault. So
+the honest reading is: the crash is an upstream robustness bug (`getDbInst` → `NameTable::getDataId`
+on an unresolved name, no null check), *and* every input that triggered it was malformed by us.
+Worth reporting upstream with the reproducer; not worth blaming for the delay.
+
+**Result: OpenRCX now reads our SPEF completely** —
+`Have read 14286 D_NET nets, 137520 resistors, 157182 gnd caps, 243668 coupling caps`.
+
+## ⚠️ What it says about our RC, which is the real work
+
+The reader is satisfied; the *contents* are not yet. On this block OpenRCX reports:
+
+| | count | of 14 286 nets |
+| --- | ---: | --- |
+| `RCX-0272` RC **disconnected** | **1 001** | 7.0 % |
+| `RCX-0374` RC **inconsistency** | **628** | 4.4 % |
+| `RCX-0292` **looped** spef RC | 23 | 0.2 % |
+| `RCX-0044` spef inst not in db | 1 | — |
+
+`Unmatched spef and db` still stops the numeric report, so **there is still no R/C correlation
+figure** — but this is now a diagnosis of our RC *topology* rather than of our file format, which
+is a different and more interesting problem. A net whose RC network OpenRCX cannot walk as a
+connected tree is one whose parasitics no downstream timer can use properly either.
+
+That is the next piece of work, and it is extraction work rather than formatting work.
+
+## (Historical) The blocker, when it was still unexplained: `diff_spef` segfaults reading our file
 
 With the header and port defects fixed, OpenSTA parses our 17 MB SPEF. **OpenRCX's own SPEF
 reader — a different reader — crashes:**
