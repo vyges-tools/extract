@@ -242,7 +242,12 @@ impl Outcome {
 }
 
 /// Build the distributed RC network for one net from its routing geometry.
-pub fn build_network(net: &DefNet, rules: &RcRules, widths: &BTreeMap<String, f64>) -> Outcome {
+pub fn build_network(
+    net: &DefNet,
+    rules: &RcRules,
+    widths: &BTreeMap<String, f64>,
+    via_layers: &BTreeMap<String, Vec<String>>,
+) -> Outcome {
     if net.segments.is_empty() {
         return Outcome::NoGeometry;
     }
@@ -326,47 +331,71 @@ pub fn build_network(net: &DefNet, rules: &RcRules, widths: &BTreeMap<String, f6
     // joins (`li1 … L1M1_PR`, `met1 … M1M2_PR`, `met2 … M2M3_PR`), so a pair is connected only
     // where a via was declared on the lower one. A node no via accounts for stays what it
     // physically is — a Steiner point on its own wire.
-    let mut declared: BTreeMap<(i64, i64), Vec<&str>> = BTreeMap::new();
-    for (v, layer) in via_pts.iter().zip(net.via_points.iter().map(|v| &v.layer)) {
-        declared.entry(*v).or_default().push(layer.as_str());
+    let mut declared: BTreeMap<(i64, i64), Vec<&crate::def::ViaPoint>> = BTreeMap::new();
+    for (v, vp) in via_pts.iter().zip(net.via_points.iter()) {
+        declared.entry(*v).or_default().push(vp);
     }
-    // A source that gives no via placements at all (the GDS tracer establishes connectivity by
-    // shape overlap and returns only counts) gets the old co-location rule, since gating on
-    // declarations we do not have would disconnect everything.
-    let gate_on_declarations = !net.via_points.is_empty();
+    let present = |loc: &(i64, i64), l: &str| sub.contains_key(&(loc.0, loc.1, l.to_string()));
 
-    for (loc, layers) in &at_loc {
-        if layers.len() < 2 {
-            continue;
-        }
-        // Stack order: by metal height when the deck states it, else by name — which is what
-        // this has always relied on, and is correct for li1/met1..met5.
-        let mut ls = layers.clone();
-        if ls.iter().all(|l| rules.heights.contains_key(l)) {
-            ls.sort_by(|a, b| {
-                rules.heights[a]
-                    .partial_cmp(&rules.heights[b])
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| a.cmp(b))
-            });
-        } else {
+    if net.via_points.is_empty() {
+        // A source that gives no via placements at all — the GDS tracer establishes
+        // connectivity by shape overlap and returns only counts — keeps the old co-location
+        // rule. Gating on declarations we were never given would disconnect everything.
+        for (loc, layers) in &at_loc {
+            let mut ls = layers.clone();
             ls.sort();
-        }
-        for w in ls.windows(2) {
-            if gate_on_declarations
-                && !declared
-                    .get(loc)
-                    .is_some_and(|d| d.iter().any(|l| *l == w[0]))
-            {
-                continue;
+            for w in ls.windows(2) {
+                edges.push(RcEdge {
+                    a: sub[&(loc.0, loc.1, w[0].clone())],
+                    b: sub[&(loc.0, loc.1, w[1].clone())],
+                    res_ohm: rules.via_res.max(0.0),
+                });
             }
-            let a = sub[&(loc.0, loc.1, w[0].clone())];
-            let b = sub[&(loc.0, loc.1, w[1].clone())];
-            edges.push(RcEdge {
-                a,
-                b,
-                res_ohm: rules.via_res.max(0.0),
-            });
+        }
+    } else {
+        for (loc, vps) in &declared {
+            for vp in vps {
+                // 1. The LEF, which is the only authority: its VIA block names the layers.
+                let from_lef = via_layers.get(&vp.name).map(|ls| {
+                    ls.iter()
+                        .filter(|l| present(loc, l))
+                        .cloned()
+                        .collect::<Vec<_>>()
+                });
+                // 2. Failing that (no LEF, or a via it does not define), the declared layer
+                //    plus the one adjacent layer present here. Where a layer sits both above
+                //    and below, that is genuinely ambiguous and we do not guess — the net
+                //    then fails the connectivity check and degrades to a star, counted and
+                //    visible, rather than being wired up wrong and looking fine.
+                let pair = match from_lef {
+                    Some(ls) if ls.len() == 2 => Some((ls[0].clone(), ls[1].clone())),
+                    _ => {
+                        let mut here = at_loc.get(loc).cloned().unwrap_or_default();
+                        here.sort();
+                        match here.iter().position(|l| *l == vp.layer) {
+                            None => None,
+                            Some(i) => {
+                                let below = i.checked_sub(1).map(|j| here[j].clone());
+                                let above = here.get(i + 1).cloned();
+                                match (below, above) {
+                                    (Some(b), None) => Some((b, vp.layer.clone())),
+                                    (None, Some(a)) => Some((vp.layer.clone(), a)),
+                                    _ => None,
+                                }
+                            }
+                        }
+                    }
+                };
+                if let Some((a, b)) = pair {
+                    if present(loc, &a) && present(loc, &b) {
+                        edges.push(RcEdge {
+                            a: sub[&(loc.0, loc.1, a)],
+                            b: sub[&(loc.0, loc.1, b)],
+                            res_ohm: rules.via_res.max(0.0),
+                        });
+                    }
+                }
+            }
         }
     }
 
@@ -443,7 +472,7 @@ mod tests {
             via_points: Vec::new(),
         };
         let rules = RcRules::parse("met1 0.1 0.05 0.0\n").unwrap();
-        let t = build_network(&net, &rules, &BTreeMap::new())
+        let t = build_network(&net, &rules, &BTreeMap::new(), &BTreeMap::new())
             .built()
             .unwrap();
         assert_eq!(t.nodes.len(), 2);
@@ -474,7 +503,7 @@ mod tests {
             via_points: Vec::new(),
         };
         let rules = RcRules::parse("met1 0.1 0.05 0.0\n").unwrap();
-        let t = build_network(&net, &rules, &BTreeMap::new())
+        let t = build_network(&net, &rules, &BTreeMap::new(), &BTreeMap::new())
             .built()
             .unwrap();
         assert_eq!(t.nodes.len(), 4, "spine end + fork + 2 sink ends");
@@ -515,7 +544,7 @@ mod tests {
             }],
         };
         let rules = RcRules::parse("met1 0.1 0.05 0.0\nmet2 0.1 0.05 0.0\nvia 5.0\n").unwrap();
-        let t = build_network(&net, &rules, &BTreeMap::new())
+        let t = build_network(&net, &rules, &BTreeMap::new(), &BTreeMap::new())
             .built()
             .expect("one network");
         assert_eq!(components(&t.nodes, &t.edges), 1, "one net, one network");
@@ -541,7 +570,7 @@ mod tests {
             via_points: Vec::new(),
         };
         let rules = RcRules::parse("met1 0.1 0.05 0.0\n").unwrap();
-        let t = build_network(&net, &rules, &BTreeMap::new())
+        let t = build_network(&net, &rules, &BTreeMap::new(), &BTreeMap::new())
             .built()
             .expect("one network");
         assert_eq!(components(&t.nodes, &t.edges), 1);
@@ -570,7 +599,7 @@ mod tests {
         };
         let rules = RcRules::parse("met1 0.1 0.05 0.0\nmet2 0.1 0.05 0.0\nvia 5.0\n").unwrap();
         // Genuinely two pieces, so the builder refuses and the caller uses the lumped star.
-        match build_network(&net, &rules, &BTreeMap::new()) {
+        match build_network(&net, &rules, &BTreeMap::new(), &BTreeMap::new()) {
             Outcome::Disconnected { pieces } => assert_eq!(pieces, 2),
             other => panic!("expected two disconnected pieces, got {other:?}"),
         }
@@ -611,7 +640,16 @@ mod tests {
         let rules =
             RcRules::parse("met1 0.1 0.05 0.0\nmet2 0.1 0.05 0.0\nmet3 0.1 0.05 0.0\nvia 5.0\n")
                 .unwrap();
-        let t = build_network(&net, &rules, &BTreeMap::new())
+        // What the tech LEF says these vias join — the only authority on the question.
+        let via_layers: BTreeMap<String, Vec<String>> = [
+            ("M1M2_PR", vec!["via", "met1", "met2"]),
+            ("M2M3_PR", vec!["via2", "met2", "met3"]),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.into_iter().map(String::from).collect()))
+        .collect();
+
+        let t = build_network(&net, &rules, &BTreeMap::new(), &via_layers)
             .built()
             .expect("one network");
         assert_eq!(components(&t.nodes, &t.edges), 1, "still one network");
@@ -622,6 +660,83 @@ mod tests {
             t.nodes.len(),
             t.edges.len()
         );
+    }
+
+    /// And when nothing can settle the question, we decline rather than guess.
+    ///
+    /// Same shape, no LEF. The via is declared on met2 with met1 below and met3 above, so
+    /// which pair it joins is genuinely unknown. Wiring up either would be a coin flip that
+    /// produces a confident-looking SPEF, so the net degrades to the lumped star instead and
+    /// the caller counts it.
+    #[test]
+    fn an_ambiguous_via_with_no_lef_degrades_rather_than_guesses() {
+        let net = DefNet {
+            name: "n".into(),
+            pins: vec![("a".into(), "A".into()), ("b".into(), "Y".into())],
+            segments: vec![
+                seg("met1", 630.430, 1371.730, 630.430, 1372.070),
+                seg("met2", 630.430, 1371.900, 630.430, 1372.070),
+                seg("met3", 630.430, 1371.900, 630.660, 1371.900),
+            ],
+            vias: 2,
+            via_points: vec![
+                ViaPoint {
+                    x: 630.430,
+                    y: 1372.070,
+                    layer: "met1".into(),
+                    name: "M1M2_PR".into(),
+                },
+                ViaPoint {
+                    x: 630.430,
+                    y: 1371.900,
+                    layer: "met2".into(),
+                    name: "M2M3_PR".into(),
+                },
+            ],
+        };
+        let rules =
+            RcRules::parse("met1 0.1 0.05 0.0\nmet2 0.1 0.05 0.0\nmet3 0.1 0.05 0.0\nvia 5.0\n")
+                .unwrap();
+        assert!(
+            matches!(
+                build_network(&net, &rules, &BTreeMap::new(), &BTreeMap::new()),
+                Outcome::Disconnected { .. }
+            ),
+            "no LEF, three layers at one point: refuse, do not invent"
+        );
+    }
+
+    /// With only two layers at the point there is nothing to be ambiguous about, so the
+    /// LEF is not needed — and the via may be declared on EITHER side of the pair, which is
+    /// why the declared layer alone cannot be assumed to be the lower one.
+    #[test]
+    fn an_unambiguous_via_needs_no_lef_and_ignores_which_side_declared_it() {
+        for declared_on in ["met1", "met2"] {
+            let net = DefNet {
+                name: "n".into(),
+                pins: vec![("a".into(), "A".into()), ("b".into(), "Y".into())],
+                segments: vec![
+                    seg("met1", 1.0, 2.0, 1.0, 5.0),
+                    seg("met2", 1.0, 5.0, 4.0, 5.0),
+                ],
+                vias: 1,
+                via_points: vec![ViaPoint {
+                    x: 1.0,
+                    y: 5.0,
+                    layer: declared_on.into(),
+                    name: "M1M2_VIA".into(),
+                }],
+            };
+            let rules = RcRules::parse("met1 0.1 0.05 0.0\nmet2 0.1 0.05 0.0\nvia 5.0\n").unwrap();
+            let t = build_network(&net, &rules, &BTreeMap::new(), &BTreeMap::new())
+                .built()
+                .unwrap_or_else(|| panic!("declared on {declared_on}: expected one network"));
+            assert_eq!(
+                components(&t.nodes, &t.edges),
+                1,
+                "declared on {declared_on}"
+            );
+        }
     }
 
     #[test]
@@ -639,10 +754,10 @@ mod tests {
         };
         let mut tapped = whole.clone();
         tapped.segments.push(seg("met1", 10.0, 0.0, 10.0, 0.001));
-        let a = build_network(&whole, &rules, &BTreeMap::new())
+        let a = build_network(&whole, &rules, &BTreeMap::new(), &BTreeMap::new())
             .built()
             .unwrap();
-        let b = build_network(&tapped, &rules, &BTreeMap::new())
+        let b = build_network(&tapped, &rules, &BTreeMap::new(), &BTreeMap::new())
             .built()
             .unwrap();
         let stub_c = 0.001 * 0.05;
@@ -675,7 +790,7 @@ mod tests {
             via_points: Vec::new(),
         };
         let rules = RcRules::parse("met1 0.1 0.05 0.0\nmet2 0.1 0.05 0.0\nvia 5.0\n").unwrap();
-        let t = build_network(&net, &rules, &BTreeMap::new())
+        let t = build_network(&net, &rules, &BTreeMap::new(), &BTreeMap::new())
             .built()
             .unwrap();
         // 3 sub-nodes (met1@0, shared@10 split into met1/met2, met2@8) -> 4 nodes

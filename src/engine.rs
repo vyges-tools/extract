@@ -93,7 +93,7 @@ pub fn extract(job: &ExtractJob) -> Result<Extraction, ExtractError> {
     let outcomes: Vec<tree::Outcome> = d
         .nets
         .par_iter()
-        .map(|n| tree::build_network(n, &r, &lef.widths))
+        .map(|n| tree::build_network(n, &r, &lef.widths, &lef.vias))
         .collect();
     // A net whose geometry is present but will not resolve into ONE network falls back to
     // the star, which is connected by construction. That is the right output, but it is a
