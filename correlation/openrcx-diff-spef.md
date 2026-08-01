@@ -290,7 +290,14 @@ sky130 block is the missing piece** — for this and for any future OpenROAD-sid
 3. Port the union-find check into the suite as a per-`*D_NET` assertion so a regression is caught
    without needing OpenROAD at all. `tree::components` is already the shared implementation.
 
-### Worth reporting upstream
+### Reported upstream
+
+Filed 2026-08-01 as **[OpenROAD #11050](https://github.com/The-OpenROAD-Project/OpenROAD/issues/11050)**
+— the unreachable `diff_spef.out`, the dropped `calibrate_base_corner`, and the test helper that
+would raise on any call and which nothing calls. The crash is included as an unminimised
+observation with the candidates that do *not* reproduce it, so nobody repeats those dead ends.
+
+### The reasoning at the time
 
 `diff_spef` is unreachable-by-design at its own documented output *and* has no test — which is
 exactly the condition in which the null-dereference survived. We have a reproducer for the
