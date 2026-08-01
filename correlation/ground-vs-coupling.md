@@ -51,18 +51,58 @@ using the uncalibrated layers are the **closest** to the reference:
 
 The placeholder is not driving this. The error lives in the **calibrated** layers.
 
-## What the shape of the error suggests
+## What the error actually is — shielding, not a length coefficient
 
-Two different signatures, so probably two different causes:
+The first reading of the bucket table was that ground carries an **additive per-node excess**,
+since the ratio decays as nets lengthen. That is wrong, and the code says so: our grounded
+capacitance is `Σ(segment length × layer fF/µm)` and nothing else — no per-node, per-via or
+per-net term exists to be additive. The ratio moves with net size because the **layer mix** does.
 
-- **Ground gets worse as nets get shorter** (met1-only local nets are 1.72×, tall nets 1.26×). A
-  pure per-µm coefficient error would be flat with length; a ratio that decays as nets lengthen is
-  the signature of an **additive, per-net or per-node excess** — something charged once per node
-  or per via landing rather than per micron. Worth looking at what the li1/met1 stubs and via
-  landings contribute before touching any coefficient.
-- **Coupling is roughly flat at ~2.4–2.5× across every bucket.** That is the signature of a
-  **scale error in the lateral kernel**, not a structural or neighbour-search one — a wrong
-  neighbour set would vary wildly with local density, and this does not.
+Solving for the per-layer coefficients the reference implies (`fit_ground.py`, least squares over
+14 238 nets with per-layer routed length as the design matrix) pointed at met2 — 48 % of the
+routed length and apparently **1.58× too high**. Re-fitting it would have been the obvious move,
+and would have been a mistake.
+
+**The error is neighbour-dependent.** Field that terminates on a neighbour is field that did not
+terminate on ground, and a fixed fF/µm cannot express that. Adding one shielding term
+(`shield_test.py`, fitting `ref_ground ~ Σ len·c − k·ref_coupling`) does this:
+
+| | per-layer only | **+ shielding** |
+| --- | ---: | ---: |
+| per-net ratio, median | 1.122 | **1.000** |
+| spread, p90 − p10 | 0.747 | **0.398** |
+| residual RMS | 2.06 fF | **1.40 fF** |
+| implied met2 fF/µm | 0.0767 | **0.1009** (deck 0.1211) |
+
+with **k = 0.387** — about 40 % of the coupled field coming at ground's expense, which is a
+plausible charge-conservation figure rather than a number that only fits.
+
+And the direct check: the correlation between a net's **coupling-to-ground ratio** and **how far
+our deck over-states its ground** is **+0.940** across 13 990 nets. The nets we get wrong are
+precisely the dense ones.
+
+So met2's apparent 1.58× was largely shielding in disguise — met2 is the densest layer here, so
+it is the most shielded. With shielding in the model its implied coefficient rises to within 20 %
+of the deck, and met1's lands 4 % *below* the deck rather than above it.
+
+**vyges-extract already implements this.** The deck's `shield_k` reduces grounded cap by
+`shield_k · Cc_net` on exactly this reasoning — and `sky130A.vyges-extract.rules` does not set it,
+so it is 0. The mechanism was built and never turned on.
+
+### Which forces the order of the remaining work
+
+The three terms are not independent, so fitting any one alone bakes in the others' errors:
+
+1. **Coupling first.** `shield_k` multiplies *our* coupling, which is 2.40× too large — enabling
+   shielding today would over-subtract by that factor. Fitting `k` against an inflated `Cc` would
+   be fitting one error against another.
+2. **Then shielding**, with `k` near the 0.387 the reference implies.
+3. **Then the per-layer coefficients**, which only become meaningful once ground is
+   density-aware. Re-fitting them now would produce a deck tuned to this block's density.
+
+That is also the retrospective explanation for `openrcx-counter.md`: `counter` is sparse, so
+almost nothing was shielded, so an unshielded deck fitted it to 0.997 — and had to over-predict
+the moment it met a dense block.
 
 ## Why the deck did not catch this
 
@@ -90,9 +130,9 @@ the ways this would have gone quietly wrong.
 
 ## Next
 
-1. **Fit the coupling coefficient.** It is 74 % of the error and its flat ratio says a single
-   scale may carry most of it. `calibrate.py` needs to solve for coupling as well as ground,
-   which means fitting against a block where coupling is not negligible — i.e. not `counter`.
-2. **Find the additive term in ground** before re-fitting per-layer scales, or the fit will
-   absorb a per-node error into a per-µm coefficient and look right on one block again.
-3. Only then re-fit the deck across a **set** of blocks.
+1. **Fit the coupling coefficient.** 74 % of the error, roughly flat across buckets, and
+   everything else waits on it. `calibrate.py` must solve for coupling, against a block where
+   coupling is not negligible — i.e. not `counter`.
+2. **Turn on `shield_k`** and fit it, once `Cc` is trustworthy. Expect ~0.39.
+3. **Re-fit the per-layer ground coefficients** last, with shielding active, across a **set** of
+   blocks. Doing this first would tune the deck to one block's density.
