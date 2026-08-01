@@ -1,10 +1,11 @@
 # Correlating against OpenRCX with `diff_spef` — the harness, and what it found first
 
 - **Written:** 2026-08-01
-- **Status:** harness built and running. OpenRCX now **reads our SPEF completely** (it could not,
-  at all, before this). **No numeric correlation is obtained yet** — what blocks it is no longer
-  the file format but our RC *topology*; see "What it says about our RC". **Seven** interop
-  defects came out of this, all but one ours, all fixed.
+- **Status:** harness built; OpenRCX now **reads our SPEF completely**, which it could not do at
+  all before. **No numeric correlation is obtainable this way** — `diff_spef.out` is unreachable
+  in OpenROAD as pinned, verified in source. What the exercise *did* produce: **eight** writer
+  defects, all fixed, and a real extraction bug — **7 % of nets emit an RC network in more than
+  one piece**.
 - **Companion:** [`openrcx-counter.md`](openrcx-counter.md) — the per-layer cap calibration this
   was meant to generalise.
 
@@ -99,23 +100,96 @@ Worth reporting upstream with the reproducer; not worth blaming for the delay.
 **Result: OpenRCX now reads our SPEF completely** —
 `Have read 14286 D_NET nets, 137520 resistors, 157182 gnd caps, 243668 coupling caps`.
 
-## ⚠️ What it says about our RC, which is the real work
+### Defect 8, and the last one blocking the read: a port node written `*0:<port>`
 
-The reader is satisfied; the *contents* are not yet. On this block OpenRCX reports:
+`RCX-0044 1 spef insts not found in db` → `RCX-0052 Unmatched spef and db`, which aborts before
+any comparison. The count says *one*, so it reads like a corner case; it was 548 references.
+
+`emit_tree` labelled a node's instance side with `nm.id(inst).unwrap_or(0)`. A port has no
+instance side — DEF spells it with the `PIN` placeholder, which we deliberately never intern —
+so the fallback minted `*0:clk_i`, a name-map reference to an id the map has no entry for. The
+star path had the same hole from the other end of the same sentinel (`*<usize::MAX>:…`).
+
+Both are now one `node_label` helper, and **labels carry their own `*` rather than having one
+concatenated on at the emission site** — that split is what let the two disagree. The test
+asserts the *rule* (every `*<id>` in the body resolves) rather than any of the four symptoms,
+since asserting any one of them would have caught none of the others.
+
+With that fixed, `diff_spef` runs to completion: `RCX-0044` and `RCX-0052` are gone, exit 0.
+
+## ⛔ The numeric report cannot be produced — `diff_spef.out` is unreachable upstream
+
+This is the finding that matters for the plan, and it is not about our file.
+
+`diff_spef` completes, and writes nothing. The report is written through `_diffOutFP`, opened in
+exactly one place:
+
+```cpp
+// extSpef.cpp:228
+void extSpef::setUseIdsFlag(const bool diff, const bool calib) {
+  _diff = diff;
+  if (diff && !calib) { _diffLogFP = fopen("diff_spef.log", "w");
+                        _diffOutFP = fopen("diff_spef.out", "w"); }
+}
+```
+
+Across **all of OpenROAD** at the pinned SHA (`b5624809`) there are exactly two calls:
+`netRC.cpp:2116` passes `false`, and `extSpefIn.cpp:2478` passes `(true /*diff*/, true /*calib*/)`
+— which fails `diff && !calib`. `_diffOutFP` is `nullptr` at declaration and assigned nowhere
+else. **No input can make OpenROAD write `diff_spef.out`.**
+
+And the one call site that could reach it is itself unreachable from `diff_spef`: it is guarded by
+`_db_calibbase_corner >= 0`, which is set from `readSPEF`'s `calibrateBaseCorner` parameter.
+`Ext::read_spef` forwards `opt.calibrate_base_corner` (`ext.cpp:337`). `Ext::diff_spef` passes
+**`nullptr`** in that position (`ext.cpp:388`) — the option is defined in `DiffOptions`, plumbed
+through, and dropped at the call site.
+
+Nor is any of this exercised: the only reference in OpenROAD's test tree is a helper in
+`rcx/test/rcx_aux.py` that reads `opts.file = file` — a free variable, not the `filename`
+parameter — and no test calls it. **`diff_spef` has no regression coverage at all**, which is the
+same fact that explains the segfault: an unexercised path had no reason to be robust.
+
+So the harness premise — *let the incumbent define what a difference is* — **does not hold for
+`diff_spef`**. What the command can still do, and did, is act as a **conformance reader**: eight
+defects in our writer, found only by feeding our output back. That is worth keeping. It is not a
+correlation.
+
+**Getting an actual number needs the other route**: have OpenRCX `write_spef` its own extraction
+and compare per-net values, which is what `openrcx-counter.md` already does with `calibrate.py`.
+The comparator is then ours again — but both sides' *values* come from named tools and the
+comparison is a ratio anyone can re-derive, which is a weaker claim than `diff_spef` promised and
+a defensible one.
+
+## ⚠️ What the reader does say about our RC — 7 % of nets are not one network
+
+`diff_spef` cannot give values, but its topology checks run, and they found something real:
 
 | | count | of 14 286 nets |
 | --- | ---: | --- |
 | `RCX-0272` RC **disconnected** | **1 001** | 7.0 % |
-| `RCX-0374` RC **inconsistency** | **628** | 4.4 % |
+| `RCX-0374` RC **inconsistency** | 630 | 4.4 % |
 | `RCX-0292` **looped** spef RC | 23 | 0.2 % |
-| `RCX-0044` spef inst not in db | 1 | — |
 
-`Unmatched spef and db` still stops the numeric report, so **there is still no R/C correlation
-figure** — but this is now a diagnosis of our RC *topology* rather than of our file format, which
-is a different and more interesting problem. A net whose RC network OpenRCX cannot walk as a
-connected tree is one whose parasitics no downstream timer can use properly either.
+All 1 001 are internal `_NNNNN_` nets, not ports, and they are multi-pin: the first three carry
+4, 7 and 7 pins. Taking `_00768_` (4 pins, 19 grounded-cap nodes, 16 resistors) and running
+union-find over its own `*RES` edges:
 
-That is the next piece of work, and it is extraction work rather than formatting work.
+```text
+3 connected components:
+   15 nodes   *15828:Y is NOT among them          <- driver + 2 sinks
+    3 nodes   *15827:A, *15828:Y                  <- the driver, stranded with one sink
+    4 nodes   *769:15 *769:16 *769:17 *769:18     <- internal nodes reachable from nothing
+```
+
+The network we emit is **three graphs, not one**. Two sinks have no resistive path to the driver
+at all, and four internal nodes float free. A timer reading this sees either zero interconnect
+delay to those pins or an unsolvable network — so this is not a reporting nicety, it is wrong
+parasitics on one net in fourteen.
+
+This is a `tree::build_network` defect (routing segments not being stitched through the vias or
+touch-points that join them), it is squarely extraction work rather than harness work, and it is
+the next thing to fix. It is also the one finding here that a value comparison would have *hidden*
+— per-net totals can be perfectly correlated while the network they describe is in pieces.
 
 ## (Historical) The blocker, when it was still unexplained: `diff_spef` segfaults reading our file
 
@@ -139,17 +213,30 @@ sky130 block is the missing piece** — for this and for any future OpenROAD-sid
 
 ## Where this leaves the correlation
 
-- The **harness is real and reusable**; the Tcl above is the whole of it.
-- **Three interop defects are fixed**, and they were serious: until today every SPEF this engine
-  produced was unreadable by the incumbent tool chain. That is a bigger result than the accuracy
-  number would have been.
-- **No R/C correlation number is claimed** on this block. Do not quote one from here.
+- **`diff_spef` is a conformance reader, not a correlation harness.** Keep it as the former —
+  eight writer defects, none of which our own suite could see, because our own reader never has
+  to resolve a reference it did not write. Do not plan a number around it.
+- **Eight interop defects are fixed.** Until this exercise, *every* SPEF this engine had ever
+  written was unreadable by the incumbent tool chain. That is a larger result than the accuracy
+  figure would have been.
+- **No R/C correlation number is claimed on this block. Do not quote one from here.**
+- **7 % of nets have an RC network in pieces** — the real defect this found, and the one a value
+  comparison would have missed.
 
 ### Next, in order
 
-1. **A small routed sky130 block with a loadable DEF/LEF** — unblocks isolation of the segfault
-   and gives every future OpenROAD comparison a cheap vehicle.
-2. Re-run `diff_spef` there; if it still crashes on our file, bisect the SPEF to the construct
-   that triggers it and report upstream.
-3. Only then extend the deck calibration to a **set** of blocks, which is what
-   `openrcx-counter.md` says is needed and what met4/met5 now concretely require.
+1. **Fix `tree::build_network`** so a net's segments form one connected graph. The union-find
+   check above is the test: run it over every `*D_NET` and assert one component. That belongs in
+   the suite, not in a script — it is checkable entirely from our own output, which is why its
+   absence is on us and not on the harness.
+2. Re-run this harness. `RCX-0272`/`RCX-0374`/`RCX-0292` going to zero is a real pass/fail gate
+   even though no number comes with it.
+3. **Then** get a number via OpenRCX `write_spef` + per-net ratio, and extend the deck
+   calibration to a **set** of blocks — what `openrcx-counter.md` says is needed and what
+   met4/met5 concretely require.
+
+### Worth reporting upstream
+
+Two things, with a reproducer each, and they are related: `diff_spef` is unreachable-by-design at
+its own documented output *and* has no test, which is exactly the condition in which the
+null-dereference on an unresolved name survived.
