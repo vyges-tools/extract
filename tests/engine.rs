@@ -3,6 +3,73 @@
 use vyges_extract::engine::run_to_spef;
 use vyges_extract::job::ExtractJob;
 
+/// Assert every `*D_NET` in a rendered SPEF is **one** connected RC network.
+///
+/// This is the invariant OpenRCX checks as `RCX-0272 RC of net … is disconnected`, and on one
+/// real block it was false for 7 % of nets — sinks with no resistive path to their driver, which
+/// a timer reads as no interconnect delay at all. It is checkable entirely from our own output,
+/// so its absence was ours: nothing here needed OpenROAD to catch it.
+///
+/// Deliberately a check on the *file* rather than on `RcNetwork`, because the star fallback and
+/// the emitter are between the builder and what a reader actually sees.
+fn assert_every_net_is_one_network(spef: &str) {
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut checked = 0;
+    for block in spef.split("*D_NET ").skip(1) {
+        let name = block.split_whitespace().next().unwrap_or("?").to_string();
+        let body = &block[..block.find("*END").unwrap_or(block.len())];
+        // grounded `*CAP` entries (2 fields after the index) are the nodes; `*RES` are the edges
+        let mut nodes: BTreeSet<&str> = BTreeSet::new();
+        let mut edges: Vec<(&str, &str)> = Vec::new();
+        let (mut in_cap, mut in_res) = (false, false);
+        for line in body.lines() {
+            match line.trim() {
+                "*CAP" => (in_cap, in_res) = (true, false),
+                "*RES" => (in_cap, in_res) = (false, true),
+                "*CONN" => (in_cap, in_res) = (false, false),
+                l => {
+                    let f: Vec<&str> = l.split_whitespace().collect();
+                    if in_cap && f.len() == 3 {
+                        nodes.insert(f[1]); // coupling entries have 4 fields — not this net's
+                    } else if in_res && f.len() == 4 {
+                        nodes.insert(f[1]);
+                        nodes.insert(f[2]);
+                        edges.push((f[1], f[2]));
+                    }
+                }
+            }
+        }
+        if nodes.len() < 2 {
+            continue; // a single lumped node is trivially one network
+        }
+        let idx: BTreeMap<&str, usize> = nodes.iter().copied().zip(0..).collect();
+        let mut parent: Vec<usize> = (0..idx.len()).collect();
+        fn find(parent: &mut [usize], mut x: usize) -> usize {
+            while parent[x] != x {
+                parent[x] = parent[parent[x]];
+                x = parent[x];
+            }
+            x
+        }
+        for (a, b) in edges {
+            let (ra, rb) = (find(&mut parent, idx[a]), find(&mut parent, idx[b]));
+            parent[ra] = rb;
+        }
+        let pieces = (0..idx.len())
+            .filter(|&i| find(&mut parent, i) == i)
+            .count();
+        assert_eq!(
+            pieces,
+            1,
+            "net {name}: {} nodes in {pieces} disconnected pieces — some node has no \
+             resistive path to the rest\n{body}",
+            idx.len()
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "the scan found no multi-node net to check");
+}
+
 /// Sum the single-node `*CAP` grounded entries and the `*RES` resistances inside
 /// one net's `*D_NET … *END` block, and report whether any internal junction node
 /// (`*<netid>:<k>`) appears — i.e. the net was emitted as a distributed tree.
@@ -55,6 +122,7 @@ fn example_counter_extracts_to_spef() {
     let job = ExtractJob::load(job_path).unwrap();
     let spef = run_to_spef(&job).unwrap();
 
+    assert_every_net_is_one_network(&spef);
     assert!(spef.contains("*DESIGN \"counter\""));
     assert!(spef.contains("*1 clk"));
 
@@ -102,5 +170,45 @@ fn example_counter_extracts_to_spef() {
     assert!(
         (res2 - 3.94).abs() < 1e-6,
         "n0 resistances sum to 3.94, got {res2}"
+    );
+}
+
+/// The connectivity check has to be able to fail, or it is decoration.
+///
+/// Same shape the real defect had: a `*CAP` node that no `*RES` edge reaches.
+#[test]
+#[should_panic(expected = "disconnected pieces")]
+fn the_connectivity_check_rejects_a_net_in_pieces() {
+    assert_every_net_is_one_network(
+        "*D_NET *1 1.0\n\
+         *CONN\n\
+         *I *2:Y O\n\
+         *I *3:A I\n\
+         *CAP\n\
+         1 *2:Y 0.4\n\
+         2 *1:1 0.3\n\
+         3 *3:A 0.3\n\
+         *RES\n\
+         1 *2:Y *1:1 5.0\n\
+         *END\n",
+    );
+}
+
+/// …and pass the same net once the missing edge is there.
+#[test]
+fn the_connectivity_check_accepts_the_repaired_net() {
+    assert_every_net_is_one_network(
+        "*D_NET *1 1.0\n\
+         *CONN\n\
+         *I *2:Y O\n\
+         *I *3:A I\n\
+         *CAP\n\
+         1 *2:Y 0.4\n\
+         2 *1:1 0.3\n\
+         3 *3:A 0.3\n\
+         *RES\n\
+         1 *2:Y *1:1 5.0\n\
+         2 *1:1 *3:A 5.0\n\
+         *END\n",
     );
 }
