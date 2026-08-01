@@ -159,11 +159,55 @@ the hierarchical ones — not a random sample. `decompose.py` normalises both si
 itself is unchanged so far. Worth fixing, and worth noting that a name-keyed comparison is one of
 the ways this would have gone quietly wrong.
 
+## ✅ Coupling is now fitted — on a set, with a held-out block
+
+`correlation/calibrate_coupling.py` fits the per-layer coupling coefficients the same way
+`calibrate.py` fits ground: coupling is linear in a layer's coefficient, so run the **real
+extractor** once per layer with that layer at 1.0 and the rest at 0, and the per-net result is
+that layer's design-matrix column. No re-implementation to drift.
+
+The calibration set is 10 sky130 blocks, each with the OpenRCX SPEF its own OpenLane run
+produced — 35 682 nets, from `counter` (50) to `mag_phase_apb` (9 917). **`fft_ctrl_tlul`
+(14 238 nets) was held out entirely** and only scored afterwards:
+
+| | before | after |
+| --- | ---: | ---: |
+| held-out block, coupling total | 0.33× | **1.02×** |
+| held-out block, per-net median | 0.33 | **1.04** (p10 0.83, p90 1.24) |
+| every fitted block, per-net median | 0.29 – 0.33 | **0.93 – 1.03** |
+| held-out block, **total** capacitance | 0.75× | **1.16×** |
+
+| layer | deck | fitted | constraining nets |
+| --- | ---: | ---: | ---: |
+| met1 | 0.0807 | **0.21941** | 33 035 |
+| met2 | 0.0740 | **0.26618** | 31 282 |
+| met3 | 0.0806 | **0.26458** | 711 |
+| met4 / met5 | 0.0806 | met3's value | 92 / 0 — **not fitted** |
+| li1 | 0.030 | unchanged | 0 — **not fitted** |
+
+A least-squares fit hands back **0.0** for a layer nothing constrains, and writing that would
+silently switch its coupling off. The script refuses coefficients below 200 constraining nets and
+carries a stated placeholder instead.
+
+### ⚠️ The fitted number is not physical, and that is informative
+
+At minimum spacing the fitted met1 coefficient works out to ~0.153 fF/µm against an ideal
+sidewall parallel-plate value of ~0.062 — **2.5× a bound it cannot exceed on physics**. The
+explanation is that this deck defines **no `interlayer` coefficients**, so the model computes
+*zero* crossover coupling and the lateral term is absorbing it.
+
+So the fit reproduces OpenRCX's per-net coupling across eleven blocks while being wrong
+per-mechanism. It will hold while the crossover-to-lateral ratio resembles these blocks — all
+sky130 std-cell digital — and should not be trusted on a design with markedly different layer
+usage. That bound is now written into the deck header rather than left to be rediscovered.
+
 ## Next
 
-1. **Fit the coupling coefficient.** Now a well-conditioned target: a near-uniform 0.33x with a
-   p90/p10 span of 1.6, so a single scale should carry most of it. `calibrate.py` must solve for
-   coupling, against a block where coupling is not negligible — i.e. not `counter`.
-2. **Turn on `shield_k`** and fit it, once `Cc` is trustworthy. Expect ~0.39.
-3. **Re-fit the per-layer ground coefficients** last, with shielding active, across a **set** of
-   blocks. Doing this first would tune the deck to one block's density.
+1. **Turn on `shield_k`** and fit it. Ground is untouched at 1.37× and is now the whole of the
+   remaining gap; the reference implies k ≈ 0.387, and `Cc` is finally trustworthy enough to
+   multiply. Then re-fit the per-layer ground coefficients with shielding active, on the same
+   set.
+2. **Add `interlayer` coefficients** and re-fit lateral and crossover jointly, so the coupling
+   number stops being a lump.
+3. **Escape hierarchical net names in the SPEF writer** (below) — small, and it is the
+   difference between a name-keyed comparison working and silently dropping 5 % of nets.

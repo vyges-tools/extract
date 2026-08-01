@@ -1,35 +1,52 @@
 # sky130A — open reference extraction deck for vyges-extract
 #
-# Per-layer RC for the sky130A metal stack. The **capacitance** coefficients are
-# CALIBRATED: the per-layer cap/coupling were fit so vyges-extract's per-net total
-# capacitance matches the foundry-reference extractor (OpenROAD **OpenRCX**, nom
-# corner, rules.openrcx.sky130A.nom) on a routed block — see
-# correlation/openrcx-counter.md. On that block the calibrated total tracks OpenRCX
-# to **0.997** (per-net mean 1.02, median 0.98, σ 0.13), vs ~0.60 for an
-# uncalibrated illustrative deck.
+# Two capacitance terms, calibrated separately and to very different standards. Read both
+# notes before quoting a number from this deck.
 #
-# Honest bounds: calibrated to OpenRCX (a reference extractor), not yet to silicon;
-# fit on one representative block (a production / certified per-fab deck calibrates
-# on a SET, which also breaks per-layer collinearity — e.g. li1 vs met1 — and a
-# silicon-correlated deck is the NDA plugin, never in-repo). RESISTANCE per-µm is
-# the illustrative value, not yet calibrated (an R pass is separate). The per-µm
-# model lumps width/spacing dependence that OpenRCX tables resolve — the residual
-# ±13% spread is that model gap (a width/spacing-aware deck is the next depth step).
+# ── COUPLING (4th column) — calibrated on a SET of 10 blocks, 1 held out ───────────────
+# Fit by `correlation/calibrate_coupling.py` against each block's own OpenLane OpenRCX SPEF:
+# CF_UART_APB, counter, fft_top, humidistat_apb, mag_phase_apb, rv_plic_lite,
+# spectrum_buffer, spi_host_lite, temp_sensor_apb, xbar_main — 35,682 nets. `fft_ctrl_tlul`
+# (14,238 nets) was **held out entirely** and then scored: per-net median **1.04**, p10 0.83,
+# p90 1.24, total 1.02. Every fitted block lands between 0.93 and 1.03.
+# See correlation/ground-vs-coupling.md.
+#
+#   WARNING: the fitted coefficient is ~2.5x the ideal sidewall parallel-plate value for a
+#   minimum-spaced pair, which on physics it should never exceed. That is the tell for a known
+#   structural gap: this deck defines **no `interlayer` coefficients**, so the model computes
+#   ZERO crossover (layer-to-layer) coupling and the lateral term is absorbing it. The fit
+#   therefore reproduces OpenRCX's per-net coupling well while being non-physical
+#   per-mechanism. It holds while the crossover-to-lateral ratio resembles these blocks — all
+#   sky130 std-cell digital — and should NOT be trusted on a design with markedly different
+#   layer usage. Adding interlayer terms and re-fitting both jointly is the next depth step.
+#
+#   li1 coupling is UNCALIBRATED: sky130 routing uses li1 only for via landings, so no li1
+#   wire segment appears anywhere in the calibration set and nothing constrains it. met4/met5
+#   coupling is met3's fitted value standing in (92 and 0 constraining nets respectively).
+#
+# ── GROUND CAP (3rd column) — calibrated on ONE block, and it shows ────────────────────
+# Fit by `correlation/calibrate.py` on `counter` alone (50 nets), where it tracks OpenRCX to
+# 0.997. On a dense block it runs **1.37x over** (per-net median 1.47), because `counter` is
+# sparse and this deck has no shielding: field that terminates on a neighbour is field that
+# did not terminate on ground, and a fixed fF/um cannot express that. The correlation between
+# a net's coupling-to-ground ratio and its ground error is +0.94. `shield_k` exists for
+# exactly this and is deliberately still unset — it multiplies OUR coupling, so it could not
+# be fitted until the coupling column above was trustworthy. It now is; that is the next
+# change to this file.
+#
+# ── RESISTANCE (2nd column) ───────────────────────────────────────────────────────────
+# Physical, from the sky130_fd_sc_hd nom tech LEF (RESISTANCE RPERSQ). Not calibrated against
+# anything; an R correlation pass is separate.
+#
+# Calibrated to OpenRCX, a reference extractor — NOT to silicon. A sign-off / certified
+# per-fab deck is silicon-correlated and NDA, and is never in this repo.
 #
 # layer  res(ohm/um)  cap(fF/um)  coupling(fF/um)  s_ref(um)
 li1      12.8         0.060        0.030            0.17
-met1      0.125       0.1259       0.0807           0.14
-met2      0.125       0.1211       0.0740           0.14
-met3      0.047       0.1371       0.0806           0.30
-
-# met4 / met5 — ⚠️ RESISTANCE is physical (sky130_fd_sc_hd nom tech LEF, RESISTANCE RPERSQ,
-# the same source the calibrated layers above took theirs from). CAPACITANCE IS NOT
-# CALIBRATED: it is met3's fitted value standing in, because the block this deck was
-# calibrated on (`counter`) never routes above met3, so the fit had nothing to say about
-# these layers. Extraction on a design that uses them will be right in R and approximate in
-# C — quantify it before quoting a number, and see correlation/openrcx-fft.md for what that
-# is worth on a block where met4+met5 are 0.24% of routed segments.
-met4      0.047       0.1371       0.0806           0.30
-met5      0.0285      0.1371       0.0806           1.60
+met1      0.125       0.1259       0.21941          0.14
+met2      0.125       0.1211       0.26618          0.14
+met3      0.047       0.1371       0.26458          0.30
+met4      0.047       0.1371       0.26458          0.30
+met5      0.0285      0.1371       0.26458          1.60
 via       9.3
 couple_cutoff 2.0     # um — ignore lateral coupling beyond this gap
