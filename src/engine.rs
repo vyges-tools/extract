@@ -77,6 +77,7 @@ pub fn extract(job: &ExtractJob) -> Result<Extraction, ExtractError> {
         Some(p) => Lef::load(&job.resolve(p)).map_err(|e| ExtractError::Parse(e.to_string()))?,
         None => Lef::default(),
     };
+    emit_input_coverage(&d, &r, &lef, job.lef.is_some());
     // Per-net RC is independent across nets — extract them in parallel (rayon). The pool
     // size is set once in main() from `--threads`/`-j` (default: all cores). collect() into
     // a Result short-circuits on the first net that fails to parse, same as the serial path.
@@ -131,4 +132,79 @@ pub fn run_to_spef(job: &ExtractJob) -> Result<String, ExtractError> {
         &ex.couplings,
         None,
     ))
+}
+
+
+/// Report how much of the layout the extraction inputs actually describe.
+///
+/// Extraction's silent failure is not a file that fails to parse — it is a net with no routing
+/// geometry, which extracts to nothing and reports a parasitic of essentially zero, and a layer
+/// the rules do not define, whose segments are then extracted against a default nobody chose.
+/// Both produce a SPEF that looks complete.
+///
+/// Counting comes from the same shared module the other engines use where it applies; these two
+/// are extraction-specific and live here.
+fn emit_input_coverage(d: &Def, rules: &RcRules, lef: &Lef, lef_given: bool) {
+    use std::collections::BTreeSet;
+    use vyges_events::{Event, Severity};
+    let emit = |attention: bool, code: &str, msg: String| {
+        let sev = if attention { Severity::Warn } else { Severity::Info };
+        vyges_events::emit(&Event::new("vyges-extract", sev, msg).with_code(code));
+    };
+
+    let routed = d.nets.iter().filter(|n| !n.segments.is_empty()).count();
+    let bare = d.nets.len() - routed;
+    emit(
+        d.nets.is_empty() || bare > 0,
+        "EXTRACT-DEF",
+        format!(
+            "DEF: {} signal net(s), {routed} with routing geometry, {bare} with none \
+             (those extract to nothing), {} placed instance(s)",
+            d.nets.len(),
+            d.comps.len()
+        ),
+    );
+
+    // Every layer the routing actually uses, against the layers the rules and LEF describe.
+    // A layer present in the geometry and absent from the rules is extracted against a default,
+    // which is the quiet way to get a whole metal's resistance wrong.
+    let used: BTreeSet<&str> = d
+        .nets
+        .iter()
+        .flat_map(|n| n.segments.iter())
+        .map(|sg| sg.layer.as_str())
+        .collect();
+    let no_rule: Vec<&str> = used
+        .iter()
+        .copied()
+        .filter(|l| !rules.layers.contains_key(*l))
+        .collect();
+    let no_width: Vec<&str> = used
+        .iter()
+        .copied()
+        .filter(|l| !lef.widths.contains_key(*l))
+        .collect();
+
+    let mut notes = Vec::new();
+    if !no_rule.is_empty() {
+        notes.push(format!("no RC rule for {:?}", no_rule));
+    }
+    if !lef_given {
+        // Not a defect — the LEF is optional — but it changes what the numbers mean, and that
+        // is worth one line rather than a footnote in a manual.
+        notes.push("no LEF given, so widths are defaults rather than the technology's".into());
+    } else if !no_width.is_empty() {
+        notes.push(format!("no LEF width for {:?}", no_width));
+    }
+    let base = format!(
+        "layers: {} used by the routing, {} with RC rules, {} with LEF widths",
+        used.len(),
+        used.len() - no_rule.len(),
+        used.len() - no_width.len()
+    );
+    emit(
+        !no_rule.is_empty(),
+        "EXTRACT-LAYERS",
+        if notes.is_empty() { base } else { format!("{base} — {}", notes.join("; ")) },
+    );
 }
