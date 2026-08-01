@@ -152,21 +152,33 @@ pub fn render_distributed(
     // references stay readable), then instance names.
     let mut nm = NameMap::new();
     let net_ids: Vec<usize> = nets.iter().map(|n| nm.intern(&n.name)).collect();
+    // DEF spells a TOP-LEVEL PORT connection as the pseudo-instance `PIN`, and SPEF spells one
+    // `*P <name> <dir>` rather than `*I <inst>:<pin> <dir>`. Two consequences, and missing
+    // either leaves the file broken for a different reader:
+    //
+    //   * emit the connection as `*P`, or a reader hunts for an instance named "PIN" and drops
+    //     the port's parasitics — OpenSTA warns once per port;
+    //   * and do NOT intern "PIN" into the name map, or a reader that resolves every name-map
+    //     entry as an instance fails on it. OpenRCX does, and reports
+    //     `Spef instance PIN not found in db` → `Unmatched spef and db` — and on its in-process
+    //     path the same unresolved name is a SIGSEGV rather than an error.
+    //
+    // Both were found by reading our own output back through OpenROAD; neither is visible to a
+    // test that parses our SPEF with our own reader.
+    let is_port = |inst: &str| inst == "PIN";
+    const NOT_INTERNED: usize = usize::MAX; // ports carry no name-map id
     let pin_ids: Vec<Vec<(usize, String)>> = nets
         .iter()
         .map(|net| {
             net.pins
                 .iter()
-                .map(|(inst, pin)| (nm.intern(inst), pin.clone()))
+                .map(|(inst, pin)| {
+                    let id = if is_port(inst) { NOT_INTERNED } else { nm.intern(inst) };
+                    (id, pin.clone())
+                })
                 .collect()
         })
         .collect();
-    // DEF spells a TOP-LEVEL PORT connection as the pseudo-instance `PIN`, and SPEF spells one
-    // `*P <name> <dir>` rather than `*I <inst>:<pin> <dir>`. Emitting every connection as `*I`
-    // makes a reader hunt for an instance literally named "PIN" and warn once per port —
-    // OpenSTA does exactly that, so every port on the design silently loses its parasitic
-    // connection. Found by reading our own output back through OpenROAD.
-    let is_port = |inst: &str| inst == "PIN";
 
     // The node each net presents to a coupling neighbour: the driver vertex when a
     // tree exists, else the net-id root of the star. Lets a coupling entry name a
@@ -175,10 +187,22 @@ pub fn render_distributed(
         match trees.get(n).and_then(|t| t.as_ref()) {
             Some(_) if !pin_ids[n].is_empty() => {
                 let (iid, pin) = &pin_ids[n][0];
-                format!("{iid}:{pin}")
+                // A PORT is its own node — `tl_i[74]`, not `<inst>:<pin>`. It has no name-map
+                // id because it is not an instance, and naming one anyway is how a coupling
+                // entry ends up pointing at an instance that does not exist. OpenRCX resolves
+                // every such reference and **segfaults** when it cannot, so this is not a
+                // cosmetic difference; found by bisecting our own SPEF against `diff_spef`.
+                if *iid == NOT_INTERNED {
+                    // A port is written literally. The leading `*` marks a NAME-MAP REFERENCE,
+                    // so prefixing one here asks the reader to look up an id named `tl_i[74]`
+                    // — which OpenRCX does, and segfaults on.
+                    pin.clone()
+                } else {
+                    format!("*{iid}:{pin}")
+                }
             }
-            Some(_) => format!("{}:0", net_ids[n]), // pinless tree -> first internal node
-            None => format!("{}", net_ids[n]),      // star root
+            Some(_) => format!("*{}:0", net_ids[n]), // pinless tree -> first internal node
+            None => format!("*{}", net_ids[n]),      // star root
         }
     };
     let id_of: BTreeMap<&str, usize> = nets
@@ -233,6 +257,38 @@ pub fn render_distributed(
         s.push_str(&format!("*{} {}\n", i + 1, name));
     }
     s.push('\n');
+
+    // `*PORTS` MUST follow `*NAME_MAP` — a reader that meets `*PORTS` first concludes there
+    // is no name map at all (`RCX-0296`). Declares the design's top-level ports before any net
+    // references one. OpenRCX
+    // requires it — `RCX-0295 There is no *PORTS section` — and omitting it while still emitting
+    // `*P` records leaves every port reference dangling. Collected from the nets rather than
+    // taken from a separate list, so it cannot disagree with what the `*CONN` records name.
+    let mut ports: std::collections::BTreeMap<&str, &'static str> = Default::default();
+    for (n, net) in nets.iter().enumerate() {
+        for (k, (inst, pin)) in net.pins.iter().enumerate() {
+            if is_port(inst) {
+                let _ = (n, k);
+                let d = match resolver
+                    .map(|r| r.resolve(inst, pin).0)
+                    .unwrap_or(vyges_loom::lef::PinDir::Unknown)
+                {
+                    vyges_loom::lef::PinDir::Output => "O",
+                    vyges_loom::lef::PinDir::Inout => "B",
+                    _ => "I",
+                };
+                ports.insert(pin.as_str(), d);
+            }
+        }
+    }
+    if !ports.is_empty() {
+        s.push_str("*PORTS\n");
+        for (name, dir) in &ports {
+            s.push_str(&format!("{name} {dir}\n"));
+        }
+        s.push('\n');
+    }
+
 
     for (n, net) in nets.iter().enumerate() {
         let nid = net_ids[n];
@@ -305,10 +361,10 @@ pub fn render_distributed(
                     .map(|&j| rep_label(j))
                     .unwrap_or_else(|| {
                         nm.id(&c.b)
-                            .map(|b| b.to_string())
-                            .unwrap_or_else(|| nid.to_string())
+                            .map(|b| format!("*{b}"))
+                            .unwrap_or_else(|| format!("*{nid}"))
                     });
-                s.push_str(&format!("{ci} *{rep_a} *{rep_b} {}\n", val(c.cap_ff)));
+                s.push_str(&format!("{ci} {rep_a} {rep_b} {}\n", val(c.cap_ff)));
             }
         }
         if !res_lines.is_empty() {
