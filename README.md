@@ -166,9 +166,11 @@ by the M0/M3 runs. Today a "plugin" is just the `.rules` deck you pass on the CL
 formal per-fab plugin packaging (discovery, signing, repo-per-fab) is the
 remaining open item. The **calibrated** sky130A deck lives at
 [`pdk/sky130A/sky130A.vyges-extract.rules`](pdk/sky130A/sky130A.vyges-extract.rules):
-its per-layer caps are fit to the OpenRCX nom golden on a routed block, so total
-capacitance tracks OpenRCX to **0.997** (per-net mean ~1.0, σ 0.13) — vs ~0.60 for
-an uncalibrated deck. Method + harness in
+its per-layer ground, coupling and shielding terms are fit against the OpenRCX nom golden
+across **10 routed blocks**, and scored on an eleventh **held out of every fit**, where total
+capacitance lands at **1.00×** (ground 0.98, coupling 1.02). Method, harness and the bounds
+that come with it in [`correlation/ground-vs-coupling.md`](correlation/ground-vs-coupling.md);
+the earlier single-block fit it replaced is
 [`correlation/openrcx-counter.md`](correlation/openrcx-counter.md).
 
 Getting *sign-off-grade* output on a **commercial** node takes two things beyond
@@ -272,14 +274,18 @@ Regenerate or re-check any of this with `correlation/calibrate_coupling.py`,
 ### Known limits — read these before quoting a number
 
 - **Inter-layer (crossover) coupling is not modelled.** The engine supports an `interlayer`
-  coefficient, but **no shipped deck defines one**, so layer-to-layer coupling computes as zero
-  and the lateral coefficients absorb its effect on the totals. Fitting crossover explicitly was
-  tried and **not adopted**: it produces a coefficient ~25× a parallel-plate estimate and widens
-  the per-net spread rather than narrowing it. So the totals above are calibrated and validated,
-  but the **per-mechanism split is not** — do not read the lateral coefficient as a physical
-  sidewall capacitance, and treat the deck as an empirical fit over sky130 std-cell digital
-  routing rather than something that necessarily travels to very different layer usage.
-  Method and evidence: [`correlation/ground-vs-coupling.md`](correlation/ground-vs-coupling.md).
+  coefficient, but **no shipped deck defines one**, so layer-to-layer coupling computes as zero.
+  Measured against the reference this accounts for roughly **2.5 % of its coupling** — the pairs
+  it reports and we never find. Fitting crossover explicitly was tried and **not adopted**: it
+  produces a coefficient ~25× a parallel-plate estimate and widens the per-net spread rather than
+  narrowing it.
+- **The totals are calibrated and validated; the per-mechanism split is not.** Compared pair by
+  pair rather than in total, the deck is uniformly **~20 % low on the net pairs it shares with the
+  reference** and long on small ones, and the two roughly cancel. Do not read the lateral
+  coefficient as a physical sidewall capacitance, and treat the deck as an empirical fit over
+  sky130 std-cell digital routing rather than something that necessarily travels to very
+  different layer usage. Method and evidence:
+  [`correlation/ground-vs-coupling.md`](correlation/ground-vs-coupling.md).
 - **Calibrated to OpenRCX, not to silicon.** A sign-off / certified per-fab deck is
   silicon-correlated and NDA; it is never in this repo.
 - **Resistance has not been correlated at all.** It is the physical tech-LEF value, taken on

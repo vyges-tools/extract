@@ -333,12 +333,54 @@ tens of fF between long parallel nets (`_00990_`/`_01006_` at 31 fF). Either tho
 adjacent the way our geometry thinks, or the reference is attributing that field somewhere else.
 One net, two files, decidable.
 
+## The cutoff sweep, re-run — and the yardstick was the problem
+
+The largest disputed pair (`_00990_`/`_01006_`, 31 fF we claim and the reference does not) turned
+out to sit at a **0.88 µm gap**, not minimum spacing — two or three tracks away, with wires in
+between. The obvious reading was that we lack screening: a real extractor knows the intervening
+metal shields that pair, and we keep counting it through a bare `1/gap` fall-off.
+
+Sweeping `couple_cutoff` says otherwise. (The first sweep of this, which showed the cutoff barely
+mattering, ran while the LEF reader reported met1 as 3 µm wide — every gap was negative, so the
+cutoff could never trip. It was re-run against the fixed reader.)
+
+| cutoff | shared pairs | only ours (≥0.1 fF) | only the reference | per-pair median |
+| ---: | ---: | ---: | ---: | ---: |
+| 2.0 µm | 78 811 | 17 346 / 4 153 fF | 10 029 / 1 110 fF | 0.82 |
+| 1.0 µm | 66 623 | 5 744 / 1 398 fF | 22 217 / 3 302 fF | 0.79 |
+| 0.5 µm | 42 495 | **3 / 1 fF** | **46 345 / 10 557 fF** | 0.77 |
+| 0.25 µm | 23 871 | 0 | 64 969 / 26 002 fF | 0.73 |
+
+Tightening the cutoff does remove our extra pairs — and immediately loses far more of the
+reference's. **The reference reports coupling well past 1 µm of gap**; it is not screening those
+neighbours out, so our 2.0 µm reach is right and the screening story is wrong.
+
+What survives every cutoff is the interesting part: **the per-pair median sits at 0.77–0.82
+throughout**. On the pairs we share we are uniformly ~20 % low, and no pairing change touches it.
+
+### Which means the "2.5× a parallel plate" anomaly may not be one
+
+That figure compared our *fitted lump* against a bare sidewall parallel-plate bound. But the
+fitted coefficient is, by construction, **the coefficient the reference behaves as if it used** —
+`calibrate_coupling.py` regresses the reference's own per-net coupling onto our geometry. If
+0.219 fF/µm is unphysical, then so is the foundry-reference extractor, on its own numbers.
+
+The likelier reading is that the bound was the wrong yardstick: a bare plate ignores fringe from
+the top and bottom of the sidewall, and our `s_ref/max(gap, s_ref)` shape clamps at 0.14 µm while
+the common routed gap is 0.20 µm, so the coefficient must run ~1.4× high just to reproduce the
+same effective value. Those two together account for most of the gap; they do not obviously
+account for all of it.
+
+So the honest state is weaker than "the mechanism is wrong" and weaker than "everything is fine":
+**we are uniformly ~20 % low per pair, the pair set is close but not identical (89 % of the
+reference's, missing 2.5 % of its coupling — plausibly the crossover we compute as zero), and the
+physical objection to the coefficient rests on a bound that does not clearly apply.**
+
 ## Next
 
-1. **Take one large disputed pair apart.** `_00990_`/`_01006_` — 31 fF we report, nothing from the
-   reference. Establish from the DEF whether the adjacency is real. That answers whether we are
-   over-claiming geometry or the reference is booking it elsewhere, and it is one net rather than
-   a fitting campaign.
+1. **Chase the uniform 20 % per-pair deficit**, which is now the single largest well-characterised
+   error and is invariant to every knob tried. It is a shape question — the `s_ref` clamp and the
+   `1/gap` fall-off — rather than a scale one, since scale is already fitted.
 3. **Escape hierarchical net names in the SPEF writer** (above) — small, and it is the difference
    between a name-keyed comparison working and silently dropping 5 % of nets.
 4. Resistance has never been correlated at all. Capacitance is now two terms deep; R is still the
