@@ -240,38 +240,62 @@ On `fft_ctrl_tlul`, **held out of every fit**:
 Started at ground 1.37× / coupling 0.33× / total 0.75×, with a topology that had 7 % of nets in
 disconnected pieces.
 
-## ⚠️ Crossover was tested as the explanation, and it does not settle it
+## ⚠️ Crossover: identifiable after all, and it still does not settle the mechanism
 
 The stated reason for the coupling coefficient being ~2.5× a sidewall parallel-plate bound was
 that the deck has no `interlayer` term, so crossover coupling is computed as zero and the lateral
-coefficient absorbs it. That is a hypothesis, and it was tested.
+coefficient absorbs it. That is a hypothesis, and it has now been tested twice.
 
-`calibrate_coupling.py` now fits lateral **and** crossover jointly — one coefficient per layer
-plus one per adjacent layer pair, all competing for the same reference coupling. The result:
+**First attempt — the fit refused the term.** `calibrate_coupling.py` fits lateral **and**
+crossover jointly (one coefficient per layer, one per adjacent layer pair, all competing for the
+same reference coupling). On the original 11-block set it drove every significant crossover pair
+to **0.0** and made the held-out block marginally worse. The reason was not physics: the two
+columns are **0.93–0.96 correlated** there (`collinearity.py`), so least squares cannot separate
+them and zeroing one is what it does.
 
-- every significant crossover pair is driven to **0.0** — met1/met2 with 33 304 constraining
-  nets, met2/met3 with 7 719;
-- the held-out block **does not improve**: median 1.04 → 1.06, marginally worse;
-- the only surviving term is met3/met4 on 497 nets, which reads as an artefact of a thin slice.
+**That was blamed on the wrong thing.** The conclusion drawn was "we need a block that is not
+sky130 std-cell digital". Wrong twice over:
 
-**But that is not evidence crossover is negligible.** The two columns are **0.93–0.96 correlated**
-on this set (`collinearity.py`, measured on CF_UART_APB and mag_phase_apb): nets with more
-lateral overlap have proportionally more crossings, because both scale with routed length in
-std-cell routing. A fit cannot separate columns that similar, so zeroing one is what least
-squares does, not a statement about physics.
+- **Layer mix is nearly invariant** across these designs — `openframe_project_wrapper` has 6× the
+  routing of `fft_ctrl_tlul` (4.19 M µm) and almost the same profile (met1 39 % / met2 41 % /
+  met3 12 % vs 44 / 41 / 9). Same PDK, same router, same preferred directions.
+- **But collinearity is not.** On the wrapper and `xbar_mem` it is **+0.62**, not +0.93. The
+  blocks that break the degeneracy were already in hand; the layer mix simply does not predict
+  which those are, and inferring it from the mix was a mistake.
 
-So the honest position, now in the deck header: **the totals are calibrated and validated; the
-mechanism is not established, and this data cannot establish it.** The fitted crossover deck was
-*not* shipped — the change is a corrected caveat, not a new number.
+**Second attempt — with those blocks in, crossover is identified.** Adding
+`openframe_project_wrapper`, `picorv32` and `xbar_mem` (14 blocks, 53 522 nets):
 
-That also sharpens what the next block is for. It is not "another data point"; it is specifically
-a block whose crossover-to-lateral ratio differs enough to break the collinearity, which means
-something that is not sky130 std-cell digital.
+| | lateral-only | joint |
+| --- | ---: | ---: |
+| met1 lateral | 0.2219 | **0.1516** |
+| met2 lateral | 0.2706 | **0.2260** |
+| met1/met2 crossover | — | **1.719** (54 015 nets) |
+| met2/met3 crossover | — | **2.397** (22 012 nets) |
+
+The lateral coefficient drops ~30 % once crossover can carry some of the load, so the "lateral is
+absorbing crossover" hypothesis is **partly supported**. But:
+
+1. **The crossover coefficient is ~25× a parallel-plate estimate.** At met1/met2 spacing
+   (d ≈ 0.45–0.65 µm, εr 3.9–4.2) the plate value is 0.053–0.083 fF/µm²; the fit wants 1.72.
+2. **Prediction does not improve.** Held-out median 1.04 → 1.01, but p10 0.83 → 0.76 and p90
+   1.24 → 1.33. `xbar_mem` degrades badly: p90 1.22 → 2.06. Centres shift slightly, spreads widen.
+
+So the joint model is **curve-fitting, not mechanism recovery** — it buys a more physical lateral
+coefficient with a wildly unphysical crossover one and a worse spread. **It was not shipped.**
+
+The honest state: the totals are calibrated and validated; the mechanism is not established; and
+it is now known that "crossover is simply missing" does not explain it either. Something else is
+inflating the coupling a real extractor reports relative to what a sidewall model predicts, and
+neither of the two obvious candidates — an over-inclusive neighbour search, a missing crossover
+term — survives contact with the data.
 
 ## Next
 
-1. **A held-out block that is not sky130 std-cell digital**, to break the lateral/crossover
-   collinearity. More fitting on more of the same blocks cannot resolve this.
+1. **Find what the lateral coefficient is really carrying.** Not crossover, and not the
+   neighbour search. The next thing to check is whether the reference's coupling column includes
+   coupling to POWER (`SPECIALNETS`) — which this engine never sees, since it reads signal nets
+   only — because that would be a whole class of neighbour we attribute to the wrong place.
 3. **Escape hierarchical net names in the SPEF writer** (above) — small, and it is the difference
    between a name-keyed comparison working and silently dropping 5 % of nets.
 4. Resistance has never been correlated at all. Capacitance is now two terms deep; R is still the
