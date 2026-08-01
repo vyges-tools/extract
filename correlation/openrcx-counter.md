@@ -58,8 +58,8 @@ spread (was a systematic ~0.6× undercount). The calibrated met caps land at
 **Follow-up (2026-08-01):** taking this deck to a 285x larger block found that it cannot extract
 it at all — `counter` never routes above met3, so the fit produced no met4/met5 entries. See
 [`openrcx-diff-spef.md`](openrcx-diff-spef.md), which also records three interop defects that
-made every SPEF this engine wrote unreadable by OpenSTA. The "fit on one block" caveat below was
-right and understated.
+made every SPEF this engine wrote unreadable by OpenSTA. The "fit on one block" caveat above was
+right, and understated.
 
 Reproduce: `python3 correlation/calibrate.py` (needs the routed DEF/LEF + the OpenRCX
 nom SPEF; paths at the top of the script). The emitted deck is
