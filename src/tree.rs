@@ -310,16 +310,56 @@ pub fn build_network(net: &DefNet, rules: &RcRules, widths: &BTreeMap<String, f6
         }
     }
 
-    // Via resistors: at any location where the route changes layer, connect the
-    // per-layer sub-nodes in a stack. Total via resistance is scaled to the net's
-    // reported via count at emit time; here each transition carries one via_res.
+    // Via resistors, between the per-layer sub-nodes at a location. Total via resistance is
+    // scaled to the net's reported via count at emit time; here each transition carries one
+    // via_res.
+    //
+    // Which pairs get one is the delicate part. "Every layer present at this location" was
+    // safe only while nodes existed at segment endpoints alone. Splitting puts nodes at far
+    // more places — including where *another* layer's via cut through — so that rule now
+    // fabricates connections: a met2→met3 via at a point the met1 wire merely passes through
+    // would also short met1 to met2, and if those two are legitimately joined elsewhere the
+    // net comes back with a loop in it. That is how the loop count went up when the
+    // disconnection count went to zero.
+    //
+    // So gate on what the routing DECLARES. DEF names a via on the lower of the two layers it
+    // joins (`li1 … L1M1_PR`, `met1 … M1M2_PR`, `met2 … M2M3_PR`), so a pair is connected only
+    // where a via was declared on the lower one. A node no via accounts for stays what it
+    // physically is — a Steiner point on its own wire.
+    let mut declared: BTreeMap<(i64, i64), Vec<&str>> = BTreeMap::new();
+    for (v, layer) in via_pts.iter().zip(net.via_points.iter().map(|v| &v.layer)) {
+        declared.entry(*v).or_default().push(layer.as_str());
+    }
+    // A source that gives no via placements at all (the GDS tracer establishes connectivity by
+    // shape overlap and returns only counts) gets the old co-location rule, since gating on
+    // declarations we do not have would disconnect everything.
+    let gate_on_declarations = !net.via_points.is_empty();
+
     for (loc, layers) in &at_loc {
         if layers.len() < 2 {
             continue;
         }
+        // Stack order: by metal height when the deck states it, else by name — which is what
+        // this has always relied on, and is correct for li1/met1..met5.
         let mut ls = layers.clone();
-        ls.sort();
+        if ls.iter().all(|l| rules.heights.contains_key(l)) {
+            ls.sort_by(|a, b| {
+                rules.heights[a]
+                    .partial_cmp(&rules.heights[b])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.cmp(b))
+            });
+        } else {
+            ls.sort();
+        }
         for w in ls.windows(2) {
+            if gate_on_declarations
+                && !declared
+                    .get(loc)
+                    .is_some_and(|d| d.iter().any(|l| *l == w[0]))
+            {
+                continue;
+            }
             let a = sub[&(loc.0, loc.1, w[0].clone())];
             let b = sub[&(loc.0, loc.1, w[1].clone())];
             edges.push(RcEdge {
@@ -534,6 +574,54 @@ mod tests {
             Outcome::Disconnected { pieces } => assert_eq!(pieces, 2),
             other => panic!("expected two disconnected pieces, got {other:?}"),
         }
+    }
+
+    /// The other half of "do not invent connectivity", and the one splitting created.
+    ///
+    /// Real shape from `_00812_`. A met2→met3 via sits at a point the met1 wire merely runs
+    /// through. Splitting rightly puts a met1 node there — but if every layer present at a
+    /// location is then chained, met1 gets shorted to met2 at that point *as well as* at the
+    /// M1M2 via further along, and the net comes back with a loop in it.
+    #[test]
+    fn a_via_does_not_short_a_layer_that_merely_passes_through() {
+        let net = DefNet {
+            name: "n".into(),
+            pins: vec![("a".into(), "A".into()), ("b".into(), "Y".into())],
+            segments: vec![
+                seg("met1", 630.430, 1371.730, 630.430, 1372.070), // runs past 1371.900
+                seg("met2", 630.430, 1371.900, 630.430, 1372.070),
+                seg("met3", 630.430, 1371.900, 630.660, 1371.900),
+            ],
+            vias: 2,
+            via_points: vec![
+                ViaPoint {
+                    x: 630.430,
+                    y: 1372.070,
+                    layer: "met1".into(), // M1M2 — the genuine met1/met2 join
+                    name: "M1M2_PR".into(),
+                },
+                ViaPoint {
+                    x: 630.430,
+                    y: 1371.900,
+                    layer: "met2".into(), // M2M3 — says nothing about met1
+                    name: "M2M3_PR".into(),
+                },
+            ],
+        };
+        let rules =
+            RcRules::parse("met1 0.1 0.05 0.0\nmet2 0.1 0.05 0.0\nmet3 0.1 0.05 0.0\nvia 5.0\n")
+                .unwrap();
+        let t = build_network(&net, &rules, &BTreeMap::new())
+            .built()
+            .expect("one network");
+        assert_eq!(components(&t.nodes, &t.edges), 1, "still one network");
+        assert_eq!(
+            t.edges.len(),
+            t.nodes.len() - 1,
+            "and a TREE: {} nodes, {} edges — a loop means a via was invented",
+            t.nodes.len(),
+            t.edges.len()
+        );
     }
 
     #[test]
