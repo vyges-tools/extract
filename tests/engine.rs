@@ -212,3 +212,105 @@ fn the_connectivity_check_accepts_the_repaired_net() {
          *END\n",
     );
 }
+
+/// `shield_k` must actually be **applied**, not merely parsed.
+///
+/// The deck ships `shield_k 0.18081` and the whole ground calibration is conditioned on that
+/// subtraction happening. Until this test there was one covering the *parser* — carrying a
+/// comment noting that application lives in the engine — and nothing covering the engine. That
+/// is the same shape of gap that let OpenROAD's `diff_spef` rot: a code path with a plausible
+/// test next to it that does not exercise it.
+#[test]
+fn shield_k_is_applied_to_the_grounded_cap_not_just_parsed() {
+    use std::fs;
+    use vyges_extract::engine::extract;
+
+    let dir = std::env::temp_dir().join("vyges_extract_shield_applied");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    // Two parallel met1 wires, close enough to couple: one net pair, one coupling cap.
+    fs::write(
+        dir.join("s.def"),
+        "VERSION 5.8 ;\nDESIGN s ;\nUNITS DISTANCE MICRONS 1000 ;\n\
+         COMPONENTS 0 ;\nEND COMPONENTS\n\
+         NETS 2 ;\n\
+         - a ( u0 Y ) ( u1 A )\n  + ROUTED met1 ( 0 0 ) ( 10000 0 ) ;\n\
+         - b ( u2 Y ) ( u3 A )\n  + ROUTED met1 ( 0 340 ) ( 10000 340 ) ;\n\
+         END NETS\nEND DESIGN\n",
+    )
+    .unwrap();
+    let deck =
+        |k: f64| format!("met1 0.125 0.1 0.08 0.14\nvia 9.3\ncouple_cutoff 2.0\nshield_k {k}\n");
+
+    let run = |k: f64| {
+        fs::write(dir.join("s.rules"), deck(k)).unwrap();
+        fs::write(
+            dir.join("s.ext"),
+            "design: s\ndef: s.def\nrules: s.rules\ncorner: typical\ntemp: 25\n",
+        )
+        .unwrap();
+        let job = ExtractJob::load(dir.join("s.ext").to_str().unwrap()).unwrap();
+        let ex = extract(&job).unwrap();
+        let g: f64 = ex.nets.iter().map(|n| n.cap_ff).sum();
+        let c: f64 = ex.couplings.iter().map(|c| c.cap_ff).sum();
+        (g, c)
+    };
+
+    let (g0, c0) = run(0.0);
+    let (g5, c5) = run(0.5);
+    assert!(
+        c0 > 0.0,
+        "the fixture must actually couple, else this proves nothing"
+    );
+    assert!(
+        (c5 - c0).abs() < 1e-9,
+        "shielding moves charge out of ground, it must not change the coupling itself"
+    );
+    // Each net is charged the full pair cap (both endpoints), so the total drop is k * 2 * Cc.
+    let expected = g0 - 0.5 * 2.0 * c0;
+    assert!(
+        (g5 - expected).abs() < 1e-6,
+        "ground with shield_k=0.5 should be {expected:.6} fF, got {g5:.6} (unshielded {g0:.6})"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Guard the shipped deck against the failure modes the calibration scripts guard against
+/// internally — a hand edit does not go through those scripts.
+///
+/// A least-squares fit returns 0.0 for a layer nothing constrains, and writing that silently
+/// switches the layer off. The scripts refuse it; nothing stopped a person doing it by hand.
+#[test]
+fn the_shipped_sky130a_deck_stays_sane() {
+    use vyges_extract::rules::RcRules;
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/pdk/sky130A/sky130A.vyges-extract.rules"
+    );
+    let r = RcRules::load(path).expect("the shipped deck must parse");
+
+    assert!(!r.layers.is_empty(), "deck has layers");
+    for (name, l) in &r.layers {
+        assert!(
+            l.res_per_um > 0.0,
+            "{name}: zero resistance would report no R at all"
+        );
+        assert!(
+            l.cap_per_um > 0.0,
+            "{name}: zero ground cap would report no C at all"
+        );
+        assert!(
+            l.coupling_per_um > 0.0,
+            "{name}: zero coupling — this is what an unconstrained least-squares fit returns, \
+             and it silently removes the layer from every SI calculation downstream"
+        );
+    }
+    // Shielding is load-bearing for the ground calibration; a fraction outside (0,1) is not a
+    // charge-conservation share of anything.
+    assert!(
+        r.shield_k > 0.0 && r.shield_k < 1.0,
+        "shield_k = {} — the ground fit assumes it is a fraction and that it is ON",
+        r.shield_k
+    );
+}

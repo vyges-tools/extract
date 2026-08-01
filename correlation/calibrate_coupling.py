@@ -42,24 +42,31 @@ LAYER_RE = re.compile(r"^(li1|met\d+)$", re.I)
 
 
 def read_deck(path):
-    """-> [(layer, [res, cap, coupling, s_ref])], plus the non-layer trailer lines."""
+    """-> [(layer, [res, cap, coupling, s_ref])], plus the non-layer trailer lines.
+
+    Existing `interlayer` rows are dropped from the trailer: this script fits them, so
+    carrying the old ones through would emit each twice.
+    """
     rows, trailer = [], []
     for line in open(path):
         f = line.split("#")[0].split()
         if len(f) >= 4 and LAYER_RE.match(f[0]):
             rows.append((f[0].lower(), [float(x) for x in f[1:5]]))
-        elif f and not LAYER_RE.match(f[0]):
+        elif f and not LAYER_RE.match(f[0]) and f[0].lower() != "interlayer":
             trailer.append(line.rstrip("\n"))
     return rows, trailer
 
 
-def write_deck(path, rows, trailer, coupling_of):
+def write_deck(path, rows, trailer, coupling_of, inter=()):
+    """`inter` is an iterable of (layerA, layerB, fF/um2) crossover rows."""
     with open(path, "w") as fh:
         for name, v in rows:
             c = coupling_of(name, v[2])
             fh.write(f"{name} {v[0]} {v[1]} {c} {v[3]}\n")
         for t in trailer:
             fh.write(t + "\n")
+        for a, b, c in inter:
+            fh.write(f"interlayer {a} {b} {c}\n")
 
 
 def our_coupling(work, block, extract, deck, lef):
@@ -106,6 +113,11 @@ def main():
     ap.add_argument("--lef", required=True)
     ap.add_argument("--extract", required=True)
     ap.add_argument("--holdout", default=None, help="fit without this block, then score it")
+    ap.add_argument(
+        "--no-interlayer",
+        action="store_true",
+        help="lateral only — reproduces the earlier fit, for comparison",
+    )
     a = ap.parse_args()
 
     work = os.path.abspath(a.dir)
@@ -119,25 +131,41 @@ def main():
 
     ref = {b: parse_ref(os.path.join(work, f"{b}.nom.spef"))[1] for b in blocks}
 
-    # ---- 1. isolate: one run per (block, layer) with that layer's coupling at 1.0 ----
+    # The terms to fit. Lateral is one coefficient per layer; crossover is one per ADJACENT
+    # layer pair — non-adjacent pairs are screened by the metal between them, and including
+    # them mostly buys collinearity with the adjacent pair.
+    #
+    # Fitting both together is the point. They compete for the same reference coupling, so
+    # fitting lateral alone does not leave crossover unmodelled — it silently loads crossover
+    # onto the lateral coefficient, which is exactly the state this is meant to end.
+    terms = [("lat", L) for L in layers]
+    if not a.no_interlayer:
+        terms += [("x", (layers[i], layers[i + 1])) for i in range(len(layers) - 1)]
+    label = {("lat", L): L for L in layers}
+    label.update({("x", p): f"{p[0]}/{p[1]}" for k, p in terms if k == "x"})
+
+    # ---- 1. isolate: one run per (block, term), that term at 1.0 and every other at 0 ----
+    deck_path = os.path.join(work, os.path.basename(a.deck))
     cols = {}
-    for li, L in enumerate(layers):
+    for t in terms:
+        kind, what = t
         write_deck(
-            os.path.join(work, os.path.basename(a.deck)),
+            deck_path,
             rows,
             trailer,
-            lambda n, _c, L=L: 1.0 if n == L else 0.0,
+            (lambda n, _c, L=what: 1.0 if n == L else 0.0) if kind == "lat" else (lambda n, _c: 0.0),
+            inter=[(what[0], what[1], 1.0)] if kind == "x" else (),
         )
         for b in blocks:
-            cols[(b, L)] = our_coupling(work, b, a.extract, a.deck, a.lef)
-        print(f"  isolated {L}", flush=True)
+            cols[(b, t)] = our_coupling(work, b, a.extract, a.deck, a.lef)
+        print(f"  isolated {label[t]}", flush=True)
 
     # ---- 2. regress the reference's per-net coupling on those columns ----
     def rows_for(bs):
         A, y, tag = [], [], []
         for b in bs:
             for n, v in ref[b].items():
-                r = [cols[(b, L)].get(n, 0.0) for L in layers]
+                r = [cols[(b, t)].get(n, 0.0) for t in terms]
                 if v > 1e-4 and any(r):
                     A.append(r)
                     y.append(v)
@@ -155,49 +183,59 @@ def main():
         coef, *_ = np.linalg.lstsq(A, y, rcond=None)
         coef = np.clip(coef, 0.0, None)
 
-    print(f"\n{'layer':<8}{'deck':>10}{'fitted':>10}{'x':>8}{'nets seen':>12}")
-    for i, L in enumerate(layers):
-        deck_c = dict(rows)[L][2]
-        seen = int((A[:, i] > 0).sum())
-        print(f"{L:<8}{deck_c:>10.4f}{coef[i]:>10.4f}{coef[i]/deck_c if deck_c else 0:>8.2f}{seen:>12,}")
-        if seen < 200:
-            print(f"         ^ only {seen} nets constrain this layer — treat it as unfitted")
+    print(f"\n{'term':<12}{'fitted':>12}{'nets seen':>12}")
+    for i, t in enumerate(terms):
+        seen_i = int((A[:, i] > 0).sum())
+        print(f"{label[t]:<12}{coef[i]:>12.5f}{seen_i:>12,}")
+        if seen_i < 200:
+            print(f"             ^ only {seen_i} nets constrain this — treat it as unfitted")
 
     # ---- 3. validate, per block, before and after ----
     print("\nPER-NET coupling ratio (ours / reference)")
-    old = {L: dict(rows)[L][2] for L in layers}
+    old = {("lat", L): dict(rows)[L][2] for L in layers}
     for b in blocks:
         r_old, r_new = [], []
         for n, v in ref[b].items():
-            g = [cols[(b, L)].get(n, 0.0) for L in layers]
+            g = [cols[(b, t)].get(n, 0.0) for t in terms]
             if v <= 1e-4 or not any(g):
                 continue
-            r_old.append(sum(gi * old[L] for gi, L in zip(g, layers)) / v)
+            r_old.append(sum(gi * old.get(t, 0.0) for gi, t in zip(g, terms)) / v)
             r_new.append(sum(gi * coef[i] for i, gi in enumerate(g)) / v)
         mark = "  (HELD OUT)" if b == a.holdout else ""
         spread(f"{b} before", r_old)
         spread(f"{b} after {mark}", r_new)
 
-    # A layer no net constrains gets a least-squares answer of 0.0, and writing that would
-    # silently switch its coupling off. Carry a placeholder instead, and say which.
+    # A term no net constrains gets a least-squares answer of 0.0, and writing that would
+    # silently switch it off. Carry a placeholder instead, and say which.
     MIN_NETS = 200
-    fitted = dict(zip(layers, coef))
-    seen = {L: int((A[:, i] > 0).sum()) for i, L in enumerate(layers)}
-    metals = [L for L in layers if L.startswith("met") and seen[L] >= MIN_NETS]
-    stand_in = fitted[metals[-1]] if metals else None
+    fit_of = {t: coef[i] for i, t in enumerate(terms)}
+    seen_of = {t: int((A[:, i] > 0).sum()) for i, t in enumerate(terms)}
 
-    def final(name, deck_c):
-        if seen[name] >= MIN_NETS:
-            return round(fitted[name], 5)
-        # unconstrained: the topmost well-fitted metal stands in for a metal layer; anything
-        # else keeps whatever the deck already said, since we have learnt nothing about it.
+    lat_ok = [L for L in layers if L.startswith("met") and seen_of[("lat", L)] >= MIN_NETS]
+    stand_in = fit_of[("lat", lat_ok[-1])] if lat_ok else None
+
+    def lateral(name, deck_c):
+        t = ("lat", name)
+        if seen_of[t] >= MIN_NETS:
+            return round(fit_of[t], 5)
+        # Unconstrained: the topmost well-fitted metal stands in for a metal layer; anything
+        # else keeps what the deck already said, since we have learnt nothing about it.
         return round(stand_in, 5) if (name.startswith("met") and stand_in) else deck_c
 
-    print("\nCARRIED OVER (not fitted — too few nets to constrain):")
-    for name, v in rows:
-        if seen[name] < MIN_NETS:
-            print(f"  {name:<8}{final(name, v[2]):>10.5f}   ({seen[name]} nets)")
-    write_deck(os.path.join(work, "fitted.rules"), rows, trailer, final)
+    crossover = [
+        (p[0], p[1], round(fit_of[t], 6))
+        for t in terms
+        if t[0] == "x" and seen_of[t] >= MIN_NETS and fit_of[t] > 0
+        for p in [t[1]]
+    ]
+
+    carried = [label[t] for t in terms if seen_of[t] < MIN_NETS]
+    if carried:
+        print(f"\nNOT FITTED (under {MIN_NETS} constraining nets): {', '.join(carried)}")
+        print("  lateral layers carry a placeholder; crossover pairs are simply omitted.")
+    write_deck(
+        os.path.join(work, "fitted.rules"), rows, trailer, lateral, inter=crossover
+    )
     print(f"\nwrote {os.path.join(work, 'fitted.rules')}")
 
 

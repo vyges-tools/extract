@@ -22,14 +22,26 @@
 # error. `Cc_net` here counts a net's coupling from BOTH sides, matching `engine.rs`; expressed
 # against coupling counted once the same fraction reads ~0.36.
 #
-# ── Known bound: no interlayer term ────────────────────────────────────────────────────
-# This deck defines no `interlayer` coefficients, so crossover (layer-to-layer) coupling is
-# computed as ZERO and the lateral coefficients absorb it. The tell: at minimum spacing the
-# fitted met1 coupling is ~2.5x the ideal sidewall parallel-plate value, which it cannot exceed
-# on physics. The fit reproduces OpenRCX per-net while being wrong per-mechanism. It holds while
-# the crossover-to-lateral ratio resembles these blocks — all sky130 std-cell digital — and
-# should NOT be trusted where layer usage differs markedly. Adding interlayer terms and
-# re-fitting lateral and crossover jointly is the next depth step.
+# ── Known bound: the coupling coefficient is right in total, unexplained per mechanism ──
+# At minimum spacing the fitted met1 lateral coupling works out to ~0.154 fF/um against ~0.060
+# for an ideal sidewall parallel plate and ~0.077 for a fringe-corrected one — **~2.5x a value
+# a single sidewall pair should not exceed**. The deck reproduces OpenRCX's per-net coupling
+# across eleven blocks anyway, so something real is being counted by a coefficient that does not
+# mean what its name says.
+#
+# The obvious candidate was crossover: this deck defines no `interlayer` coefficients, so
+# layer-to-layer coupling is computed as ZERO and the lateral term could be absorbing it. That
+# was TESTED and is unresolved, not confirmed. Fitting lateral and crossover jointly
+# (`calibrate_coupling.py`, which supports `interlayer` terms) drives every significant
+# crossover pair to 0.0 and changes the held-out block by nothing (median 1.04 -> 1.06, slightly
+# worse). But that is not evidence crossover is negligible: the two columns are **0.93-0.96
+# correlated** on this set (`correlation/collinearity.py`), so the fit cannot separate them.
+#
+# So: the totals are calibrated and validated; the mechanism is not established. Treat the
+# coefficient as an empirical fit over sky130 std-cell digital routing, and do NOT assume it
+# travels to a design with markedly different layer usage. Settling it needs a block whose
+# crossover-to-lateral ratio differs enough to break the collinearity — which is why a
+# non-std-cell held-out block is the next thing worth having, rather than more fitting.
 #
 # ── Unconstrained layers ───────────────────────────────────────────────────────────────
 # li1 is UNFITTED (0 constraining nets): sky130 routing uses li1 only for via landings, so no

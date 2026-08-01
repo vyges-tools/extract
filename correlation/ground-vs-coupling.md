@@ -240,13 +240,38 @@ On `fft_ctrl_tlul`, **held out of every fit**:
 Started at ground 1.37× / coupling 0.33× / total 0.75×, with a topology that had 7 % of nets in
 disconnected pieces.
 
+## ⚠️ Crossover was tested as the explanation, and it does not settle it
+
+The stated reason for the coupling coefficient being ~2.5× a sidewall parallel-plate bound was
+that the deck has no `interlayer` term, so crossover coupling is computed as zero and the lateral
+coefficient absorbs it. That is a hypothesis, and it was tested.
+
+`calibrate_coupling.py` now fits lateral **and** crossover jointly — one coefficient per layer
+plus one per adjacent layer pair, all competing for the same reference coupling. The result:
+
+- every significant crossover pair is driven to **0.0** — met1/met2 with 33 304 constraining
+  nets, met2/met3 with 7 719;
+- the held-out block **does not improve**: median 1.04 → 1.06, marginally worse;
+- the only surviving term is met3/met4 on 497 nets, which reads as an artefact of a thin slice.
+
+**But that is not evidence crossover is negligible.** The two columns are **0.93–0.96 correlated**
+on this set (`collinearity.py`, measured on CF_UART_APB and mag_phase_apb): nets with more
+lateral overlap have proportionally more crossings, because both scale with routed length in
+std-cell routing. A fit cannot separate columns that similar, so zeroing one is what least
+squares does, not a statement about physics.
+
+So the honest position, now in the deck header: **the totals are calibrated and validated; the
+mechanism is not established, and this data cannot establish it.** The fitted crossover deck was
+*not* shipped — the change is a corrected caveat, not a new number.
+
+That also sharpens what the next block is for. It is not "another data point"; it is specifically
+a block whose crossover-to-lateral ratio differs enough to break the collinearity, which means
+something that is not sky130 std-cell digital.
+
 ## Next
 
-1. **Add `interlayer` coefficients** and re-fit lateral and crossover jointly. The totals are
-   right; the *mechanism* is not, and the deck header says so. This is the one that decides
-   whether the deck travels to a design with different layer usage.
-2. **A second held-out block**, ideally not sky130 std-cell digital, to test that claim rather
-   than assert it.
+1. **A held-out block that is not sky130 std-cell digital**, to break the lateral/crossover
+   collinearity. More fitting on more of the same blocks cannot resolve this.
 3. **Escape hierarchical net names in the SPEF writer** (above) — small, and it is the difference
    between a name-keyed comparison working and silently dropping 5 % of nets.
 4. Resistance has never been correlated at all. Capacitance is now two terms deep; R is still the
