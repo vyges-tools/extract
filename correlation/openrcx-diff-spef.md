@@ -233,8 +233,10 @@ net has no routing". On this block it fires zero times.
 ## ➡️ The accuracy question, now answered — see the companion doc
 
 With the topology right, the magnitudes are finally worth measuring, and the decomposition lives
-in **[`ground-vs-coupling.md`](ground-vs-coupling.md)**. In short: **ground 1.37×, coupling
-2.40×**, and **74 % of the excess is coupling** — the one term `calibrate.py` never fitted.
+in **[`ground-vs-coupling.md`](ground-vs-coupling.md)**. In short: **ground 1.37× over,
+coupling 0.33× (3× under)** — two separable errors in opposite directions that had been partially
+cancelling. Chasing the coupling half found a LEF reader bug that reported met1's routing width as
+3 µm.
 
 ⚠️ An earlier draft of this file quoted **2.83×** for the total. That was wrong: it compared their
 `*D_NET` sum (coupling counted once) against ours (counted on both nets). On a like-for-like rule

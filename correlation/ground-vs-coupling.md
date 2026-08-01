@@ -11,22 +11,30 @@
 
 ## The answer
 
+Two separable errors, in opposite directions:
+
 | | ours (fF) | sign-off (fF) | ratio |
 | --- | ---: | ---: | ---: |
-| ground | 83 071 | 60 653 | **1.37×** |
-| coupling | 215 839 | 90 085 | **2.40×** |
+| ground | 83 071 | 60 653 | **1.37× over** |
+| coupling | 29 728 | 90 085 | **0.33× — 3× under** |
 
-**74 % of the excess capacitance is coupling** (62 877 fF of 85 295 fF, counting each physical
-capacitor once). Coupling is also the larger half of our total in absolute terms. If only one
-thing gets fixed, it is the lateral kernel — not the per-layer ground coefficients.
-
-Per net, both errors are systematic rather than noisy — we are over on nearly every net, not
-wrong on a few:
+Per net, both are systematic rather than noisy, and coupling is now an unusually clean single
+scale — a p90/p10 span of 1.6, which is what a pure coefficient error looks like:
 
 | | p10 | p25 | median | p75 | p90 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | ground | 1.09 | 1.25 | **1.47** | 1.74 | 2.08 |
-| coupling | 1.65 | 2.05 | **2.50** | 3.03 | 3.79 |
+| coupling | 0.26 | 0.30 | **0.33** | 0.37 | 0.41 |
+
+### These are not the numbers this document first reported
+
+The first run of this comparison found coupling **2.40× over**, with a wide per-net spread
+(p10 1.65, p90 3.79). That was a **bug in the LEF reader**, not a model error, and chasing it is
+what found it — see below. With it fixed, coupling inverts to 0.33× and the spread collapses.
+
+The two errors had been **partially cancelling**: 1.37× on ground against a spurious 2.40× on
+coupling made the total look like a plausible 1.81×. It is now 0.75×. A single total ratio would
+have hidden this indefinitely, which is the argument for decomposing, made concrete.
 
 ## ⛔ Two earlier numbers were wrong, and here is why
 
@@ -36,6 +44,8 @@ their 60 653 ground + 45 043 coupling reproduces their 105 696 `*D_NET` sum exac
 adds a net's coupling from **both** sides. Summing the two files' `*D_NET` columns therefore
 compares theirs-counted-once against ours-counted-twice. On a like-for-like rule the total gap is
 **1.81×**, not 2.83×. Do not quote 2.83 from anywhere.
+
+**"74 % of the excess is coupling" went with it** — that excess was not real.
 
 **"met4/met5 are the problem" is refuted.** Those layers' capacitance is an explicitly
 uncalibrated placeholder, so they were the obvious suspect. Bucketing by how far up the stack each
@@ -104,18 +114,39 @@ That is also the retrospective explanation for `openrcx-counter.md`: `counter` i
 almost nothing was shielded, so an unshielded deck fitted it to 0.997 — and had to over-predict
 the moment it met a dense block.
 
+## The coupling error was a three-micron wire
+
+Coupling was chased the same way, and the trail is worth recording because every plausible
+hypothesis was wrong before the real cause turned up:
+
+1. **Neighbour search too generous?** No. Sweeping `couple_cutoff` from 2.0 um to 0.2 um moved
+   the block total by 11 %. Nearly all coupling is nearest-neighbour, so an over-inclusive
+   search was not it.
+2. **Geometry double-counting?** No. `overlap_gap` already requires both segments parallel, so
+   perpendicular crossings never enter the lateral term, and the grid pairing dedups candidates.
+3. **A bare parallel-plate kernel missing the ground-competition fall-off?** `field.rs` has a
+   fringe-corrected kernel the deck never enables, so this was the attractive answer. The
+   arithmetic kills it: at met1's real height (~0.94 um) and a 0.20 um gap the Sakurai fall-off
+   is `exp(-0.8/(0.2+7.53)) = 0.90`, giving 0.079 fF/um against the deck's effective 0.057 — the
+   "correction" would have made coupling *worse*.
+4. **The actual cause.** Re-implementing the identical formula in Python gave 16.7 fF for a net
+   where the engine reported 144.7 and the reference 17.4. Same lengths (the two ground figures
+   agree to 0.1 fF), same coefficients, same cutoff — so the divergence had to be an input.
+
+**`Lef` reported met1's routing width as 3 um instead of 0.14 um.** A `LAYER` block's default
+width is `WIDTH <n> ;`, but the `SPACINGTABLE` in the same block carries its own rows —
+`WIDTH 0 0.14`, `WIDTH 3 0.28` — and the reader matched those too, last-write-wins.
+
+It stayed invisible because **resistance only consults the width when the deck supplies a sheet
+resistance**, and the sky130A deck does not. Coupling always consults it, and `gap = centre -
+width` with a 3 um width makes every edge-to-edge gap negative — so every parallel neighbour
+clamps to the full coefficient and the distance cutoff never fires. That is also why the sweep in
+(1) looked so flat: the cutoff was dead code on this input.
+
+Fixed in `vyges-tools/loom 9f75a2c`, with the arity made exact — a row carrying more than one
+value is a table entry, not a declaration.
+
 ## Why the deck did not catch this
-
-[`openrcx-counter.md`](openrcx-counter.md) reports the calibrated deck tracking OpenRCX to
-**0.997 on total capacitance**. That is not contradicted here, and it is also not reassuring:
-`calibrate.py` fits **per-layer ground-cap scales** against OpenRCX's per-net totals on `counter`
-— 50 nets, sparse, where coupling is a rounding error. **The coupling model was never fitted to
-anything.** On a dense block coupling is 72 % of our total capacitance, so the one term the
-calibration never touched is now the dominant one.
-
-That is the concrete gap behind the "fit on **one** representative block" caveat that doc has
-carried from the start, and it is sharper than "accuracy degrades off the calibration set": a
-whole term of the model is unconstrained.
 
 ## Also found: our net names do not round-trip
 
@@ -130,9 +161,9 @@ the ways this would have gone quietly wrong.
 
 ## Next
 
-1. **Fit the coupling coefficient.** 74 % of the error, roughly flat across buckets, and
-   everything else waits on it. `calibrate.py` must solve for coupling, against a block where
-   coupling is not negligible — i.e. not `counter`.
+1. **Fit the coupling coefficient.** Now a well-conditioned target: a near-uniform 0.33x with a
+   p90/p10 span of 1.6, so a single scale should carry most of it. `calibrate.py` must solve for
+   coupling, against a block where coupling is not negligible — i.e. not `counter`.
 2. **Turn on `shield_k`** and fit it, once `Cc` is trustworthy. Expect ~0.39.
 3. **Re-fit the per-layer ground coefficients** last, with shielding active, across a **set** of
    blocks. Doing this first would tune the deck to one block's density.
