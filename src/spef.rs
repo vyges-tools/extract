@@ -161,6 +161,12 @@ pub fn render_distributed(
                 .collect()
         })
         .collect();
+    // DEF spells a TOP-LEVEL PORT connection as the pseudo-instance `PIN`, and SPEF spells one
+    // `*P <name> <dir>` rather than `*I <inst>:<pin> <dir>`. Emitting every connection as `*I`
+    // makes a reader hunt for an instance literally named "PIN" and warn once per port —
+    // OpenSTA does exactly that, so every port on the design silently loses its parasitic
+    // connection. Found by reading our own output back through OpenROAD.
+    let is_port = |inst: &str| inst == "PIN";
 
     // The node each net presents to a coupling neighbour: the driver vertex when a
     // tree exists, else the net-id root of the star. Lets a coupling entry name a
@@ -192,14 +198,28 @@ pub fn render_distributed(
     }
 
     let mut s = String::new();
+    // Header order and completeness are not cosmetic: OpenSTA's SPEF grammar — and therefore
+    // OpenROAD's, LibreLane's, and anything built on them — REQUIRES `*DATE` and `*DESIGN_FLOW`.
+    // Omitting either makes the file a syntax error at the first missing line, so a SPEF that
+    // reads perfectly well to us is rejected outright by the incumbent. Found by running
+    // OpenROAD's own `diff_spef` against our output; see correlation/openrcx-fft.md.
     s.push_str("*SPEF \"IEEE 1481-1999\"\n");
     s.push_str(&format!("*DESIGN \"{design}\"\n"));
-    if let Some(d) = date {
-        s.push_str(&format!("*DATE \"{d}\"\n"));
-    }
+    // Always emitted. A caller that wants a specific stamp passes one; otherwise a FIXED value
+    // is used rather than the wall clock, so output stays byte-reproducible — which is why this
+    // was optional in the first place. Reproducibility and the standard are not in tension; the
+    // mistake was treating a required field as the place to buy one.
+    s.push_str(&format!(
+        "*DATE \"{}\"\n",
+        date.unwrap_or("00:00:00 Thursday January 01, 1970")
+    ));
     s.push_str("*VENDOR \"Vyges\"\n");
     s.push_str("*PROGRAM \"vyges-extract\"\n");
     s.push_str(&format!("*VERSION \"{}\"\n", crate::VERSION));
+    // What this file does and does not carry: names are local to the design, and the net
+    // capacitances are wire-only — pin capacitance comes from the Liberty at the consumer, not
+    // from here. Both are true of what we emit; neither should be claimed loosely.
+    s.push_str("*DESIGN_FLOW \"NAME_SCOPE LOCAL\" \"PIN_CAP NONE\"\n");
     s.push_str("*DIVIDER /\n");
     s.push_str("*DELIMITER :\n");
     s.push_str("*BUS_DELIMITER [ ]\n");
@@ -243,6 +263,12 @@ pub fn render_distributed(
                 vyges_loom::lef::PinDir::Inout => "B",
                 _ => "I", // input / unknown → load
             };
+            // A port is `*P <port> <dir>`; the port's own name is the pin field, since the
+            // instance side is DEF's `PIN` placeholder and names nothing real.
+            if is_port(&nets[n].pins[k].0) {
+                s.push_str(&format!("*P {pin} {d}\n"));
+                continue;
+            }
             if cap > 0.0 {
                 s.push_str(&format!("*I *{iid}:{pin} {d} *L {}\n", val(cap)));
             } else {

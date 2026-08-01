@@ -19,7 +19,20 @@ fn header_and_units() {
     assert!(s.contains("*PROGRAM \"vyges-extract\""));
     assert!(s.contains("*C_UNIT 1 FF"));
     assert!(s.contains("*R_UNIT 1 OHM"));
-    assert!(!s.contains("*DATE")); // omitted -> reproducible
+
+    // `*DATE` and `*DESIGN_FLOW` are REQUIRED by the SPEF grammar OpenSTA implements, and
+    // therefore by OpenROAD and LibreLane. Omitting either makes the file a syntax error at the
+    // first missing line — a SPEF that reads fine to us and is rejected outright by everyone
+    // else. This test previously asserted `*DATE` was ABSENT, in the belief that omitting it
+    // was what made the output reproducible; it is not, and the belief cost us a file no
+    // incumbent could read.
+    assert!(s.contains("*DATE"), "required by the standard, whatever we think of it");
+    assert!(s.contains("*DESIGN_FLOW"), "required; also states pin caps are not included");
+
+    // Reproducibility is preserved by making the stamp FIXED, not by dropping the field.
+    let again = render("counter", &Units::default(), None, &[net()], &[]);
+    assert_eq!(s, again, "output must stay byte-identical across runs");
+    assert!(!s.contains("1970-01-01T"), "a fixed stamp, in the format the grammar expects");
 }
 
 #[test]

@@ -21,5 +21,15 @@ li1      12.8         0.060        0.030            0.17
 met1      0.125       0.1259       0.0807           0.14
 met2      0.125       0.1211       0.0740           0.14
 met3      0.047       0.1371       0.0806           0.30
+
+# met4 / met5 — ⚠️ RESISTANCE is physical (sky130_fd_sc_hd nom tech LEF, RESISTANCE RPERSQ,
+# the same source the calibrated layers above took theirs from). CAPACITANCE IS NOT
+# CALIBRATED: it is met3's fitted value standing in, because the block this deck was
+# calibrated on (`counter`) never routes above met3, so the fit had nothing to say about
+# these layers. Extraction on a design that uses them will be right in R and approximate in
+# C — quantify it before quoting a number, and see correlation/openrcx-fft.md for what that
+# is worth on a block where met4+met5 are 0.24% of routed segments.
+met4      0.047       0.1371       0.0806           0.30
+met5      0.0285      0.1371       0.0806           1.60
 via       9.3
 couple_cutoff 2.0     # um — ignore lateral coupling beyond this gap
