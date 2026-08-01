@@ -201,13 +201,53 @@ per-mechanism. It will hold while the crossover-to-lateral ratio resembles these
 sky130 std-cell digital — and should not be trusted on a design with markedly different layer
 usage. That bound is now written into the deck header rather than left to be rediscovered.
 
+## ✅ And ground, with shielding turned on
+
+`correlation/calibrate_ground.py` fits the model the deck can actually express, both terms at
+once and on the same set:
+
+    ground(net) = Σ_L( length_L × c_L )  −  k × Cc(net)
+
+Run **after** the coupling fit, not before: `k` multiplies *our* coupling, so fitting it against
+a column that is itself 3× wrong is fitting one error against another.
+
+| | before | after |
+| --- | ---: | ---: |
+| held-out block, ground total | 1.37× | **0.98×** |
+| held-out block, ground per-net median | 1.47 | **0.95** (p10 0.73, p90 1.20) |
+| every fitted block, per-net median | 1.25 – 1.47 | **0.96 – 1.01** |
+
+**`shield_k` = 0.181.** That reconciles with the 0.387 the reference's own numbers implied: that
+estimate used a net's coupling counted **once**, this fit uses the both-sides sum `engine.rs`
+actually subtracts, and 0.387/2 ≈ 0.19. Same physical fraction, columns differing by two — worth
+stating, because an unexplained 2× between two estimates of the same thing is exactly the kind of
+discrepancy that should not be left sitting in a doc.
+
+The per-layer coefficients barely moved (met1 ×0.99, met3 ×0.97); **met2 came down 20 %**, which
+is the same met2 the no-shielding fit wanted to cut by 1.58×. The shielding term did the work,
+and it confirms the diagnosis: met2 is the densest layer here, so it was the most mis-attributed.
+
+## Where the deck now stands
+
+On `fft_ctrl_tlul`, **held out of every fit**:
+
+| | ratio |
+| --- | ---: |
+| ground | **0.98×** |
+| coupling | **1.02×** |
+| **total** | **1.00×** |
+
+Started at ground 1.37× / coupling 0.33× / total 0.75×, with a topology that had 7 % of nets in
+disconnected pieces.
+
 ## Next
 
-1. **Turn on `shield_k`** and fit it. Ground is untouched at 1.37× and is now the whole of the
-   remaining gap; the reference implies k ≈ 0.387, and `Cc` is finally trustworthy enough to
-   multiply. Then re-fit the per-layer ground coefficients with shielding active, on the same
-   set.
-2. **Add `interlayer` coefficients** and re-fit lateral and crossover jointly, so the coupling
-   number stops being a lump.
-3. **Escape hierarchical net names in the SPEF writer** (below) — small, and it is the
-   difference between a name-keyed comparison working and silently dropping 5 % of nets.
+1. **Add `interlayer` coefficients** and re-fit lateral and crossover jointly. The totals are
+   right; the *mechanism* is not, and the deck header says so. This is the one that decides
+   whether the deck travels to a design with different layer usage.
+2. **A second held-out block**, ideally not sky130 std-cell digital, to test that claim rather
+   than assert it.
+3. **Escape hierarchical net names in the SPEF writer** (above) — small, and it is the difference
+   between a name-keyed comparison working and silently dropping 5 % of nets.
+4. Resistance has never been correlated at all. Capacitance is now two terms deep; R is still the
+   tech-LEF value taken on faith.

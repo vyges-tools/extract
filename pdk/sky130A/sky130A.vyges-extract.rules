@@ -1,52 +1,56 @@
 # sky130A — open reference extraction deck for vyges-extract
 #
-# Two capacitance terms, calibrated separately and to very different standards. Read both
-# notes before quoting a number from this deck.
+# Capacitance is calibrated against the foundry-reference extractor (OpenROAD **OpenRCX**, nom
+# corner, rules.openrcx.sky130A.nom) across a **set of 10 sky130 blocks**, each scored against
+# the SPEF its own OpenLane run produced: CF_UART_APB, counter, fft_top, humidistat_apb,
+# mag_phase_apb, rv_plic_lite, spectrum_buffer, spi_host_lite, temp_sensor_apb, xbar_main.
 #
-# ── COUPLING (4th column) — calibrated on a SET of 10 blocks, 1 held out ───────────────
-# Fit by `correlation/calibrate_coupling.py` against each block's own OpenLane OpenRCX SPEF:
-# CF_UART_APB, counter, fft_top, humidistat_apb, mag_phase_apb, rv_plic_lite,
-# spectrum_buffer, spi_host_lite, temp_sensor_apb, xbar_main — 35,682 nets. `fft_ctrl_tlul`
-# (14,238 nets) was **held out entirely** and then scored: per-net median **1.04**, p10 0.83,
-# p90 1.24, total 1.02. Every fitted block lands between 0.93 and 1.03.
-# See correlation/ground-vs-coupling.md.
+# `fft_ctrl_tlul` (14 238 nets) was **held out of every fit** and scored only afterwards:
 #
-#   WARNING: the fitted coefficient is ~2.5x the ideal sidewall parallel-plate value for a
-#   minimum-spaced pair, which on physics it should never exceed. That is the tell for a known
-#   structural gap: this deck defines **no `interlayer` coefficients**, so the model computes
-#   ZERO crossover (layer-to-layer) coupling and the lateral term is absorbing it. The fit
-#   therefore reproduces OpenRCX's per-net coupling well while being non-physical
-#   per-mechanism. It holds while the crossover-to-lateral ratio resembles these blocks — all
-#   sky130 std-cell digital — and should NOT be trusted on a design with markedly different
-#   layer usage. Adding interlayer terms and re-fitting both jointly is the next depth step.
+#     ground 0.98x   coupling 1.02x   TOTAL 1.00x
+#     per-net median: ground 0.95 (p10 0.73, p90 1.20), coupling 1.04 (p10 0.83, p90 1.24)
 #
-#   li1 coupling is UNCALIBRATED: sky130 routing uses li1 only for via landings, so no li1
-#   wire segment appears anywhere in the calibration set and nothing constrains it. met4/met5
-#   coupling is met3's fitted value standing in (92 and 0 constraining nets respectively).
+# Fitted by `correlation/calibrate_coupling.py` then `correlation/calibrate_ground.py`, in that
+# order — `shield_k` multiplies OUR coupling, so it cannot be fitted until the coupling column is
+# trustworthy, or you are fitting one error against another. See correlation/ground-vs-coupling.md.
 #
-# ── GROUND CAP (3rd column) — calibrated on ONE block, and it shows ────────────────────
-# Fit by `correlation/calibrate.py` on `counter` alone (50 nets), where it tracks OpenRCX to
-# 0.997. On a dense block it runs **1.37x over** (per-net median 1.47), because `counter` is
-# sparse and this deck has no shielding: field that terminates on a neighbour is field that
-# did not terminate on ground, and a fixed fF/um cannot express that. The correlation between
-# a net's coupling-to-ground ratio and its ground error is +0.94. `shield_k` exists for
-# exactly this and is deliberately still unset — it multiplies OUR coupling, so it could not
-# be fitted until the coupling column above was trustworthy. It now is; that is the next
-# change to this file.
+# ── shield_k — why ground is not just a per-um number ──────────────────────────────────
+# Field that terminates on a neighbour is field that did not terminate on ground, so a net's
+# grounded cap is reduced by `shield_k * Cc_net`. Without it a deck fitted on a sparse block
+# over-states ground on a dense one — the previous deck tracked `counter` to 0.997 and ran 1.37x
+# over on a real block, with a +0.94 correlation between a net's coupling-to-ground ratio and its
+# error. `Cc_net` here counts a net's coupling from BOTH sides, matching `engine.rs`; expressed
+# against coupling counted once the same fraction reads ~0.36.
 #
-# ── RESISTANCE (2nd column) ───────────────────────────────────────────────────────────
+# ── Known bound: no interlayer term ────────────────────────────────────────────────────
+# This deck defines no `interlayer` coefficients, so crossover (layer-to-layer) coupling is
+# computed as ZERO and the lateral coefficients absorb it. The tell: at minimum spacing the
+# fitted met1 coupling is ~2.5x the ideal sidewall parallel-plate value, which it cannot exceed
+# on physics. The fit reproduces OpenRCX per-net while being wrong per-mechanism. It holds while
+# the crossover-to-lateral ratio resembles these blocks — all sky130 std-cell digital — and
+# should NOT be trusted where layer usage differs markedly. Adding interlayer terms and
+# re-fitting lateral and crossover jointly is the next depth step.
+#
+# ── Unconstrained layers ───────────────────────────────────────────────────────────────
+# li1 is UNFITTED (0 constraining nets): sky130 routing uses li1 only for via landings, so no
+# li1 wire segment appears anywhere in the set. met4/met5 carry met3's fitted values (187 and 0
+# nets). A least-squares fit returns 0.0 for an unconstrained layer, which would silently switch
+# that layer off; both scripts refuse coefficients under 200 nets and carry a stated placeholder.
+#
+# ── Resistance ─────────────────────────────────────────────────────────────────────────
 # Physical, from the sky130_fd_sc_hd nom tech LEF (RESISTANCE RPERSQ). Not calibrated against
 # anything; an R correlation pass is separate.
 #
-# Calibrated to OpenRCX, a reference extractor — NOT to silicon. A sign-off / certified
-# per-fab deck is silicon-correlated and NDA, and is never in this repo.
+# Calibrated to OpenRCX, a reference extractor — NOT to silicon. A sign-off / certified per-fab
+# deck is silicon-correlated and NDA, and is never in this repo.
 #
 # layer  res(ohm/um)  cap(fF/um)  coupling(fF/um)  s_ref(um)
 li1      12.8         0.060        0.030            0.17
-met1      0.125       0.1259       0.21941          0.14
-met2      0.125       0.1211       0.26618          0.14
-met3      0.047       0.1371       0.26458          0.30
-met4      0.047       0.1371       0.26458          0.30
-met5      0.0285      0.1371       0.26458          1.60
+met1      0.125       0.12494      0.21941          0.14
+met2      0.125       0.09676      0.26618          0.14
+met3      0.047       0.13365      0.26458          0.30
+met4      0.047       0.13365      0.26458          0.30
+met5      0.0285      0.13365      0.26458          1.60
 via       9.3
 couple_cutoff 2.0     # um — ignore lateral coupling beyond this gap
+shield_k  0.18081     # grounded cap -= shield_k * Cc_net (both sides) — see above
