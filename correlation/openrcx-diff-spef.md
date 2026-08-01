@@ -1,8 +1,10 @@
 # Correlating against OpenRCX with `diff_spef` — the harness, and what it found first
 
 - **Written:** 2026-08-01
-- **Status:** harness built and running; **the numeric correlation is not yet obtained** — see
-  the blocker at the end. Four interop findings came out before it, three of them fixed.
+- **Status:** harness built and running. OpenRCX now **reads our SPEF completely** (it could not,
+  at all, before this). **No numeric correlation is obtained yet** — what blocks it is no longer
+  the file format but our RC *topology*; see "What it says about our RC". **Seven** interop
+  defects came out of this, all but one ours, all fixed.
 - **Companion:** [`openrcx-counter.md`](openrcx-counter.md) — the per-layer cap calibration this
   was meant to generalise.
 

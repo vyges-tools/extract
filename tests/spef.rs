@@ -26,13 +26,22 @@ fn header_and_units() {
     // else. This test previously asserted `*DATE` was ABSENT, in the belief that omitting it
     // was what made the output reproducible; it is not, and the belief cost us a file no
     // incumbent could read.
-    assert!(s.contains("*DATE"), "required by the standard, whatever we think of it");
-    assert!(s.contains("*DESIGN_FLOW"), "required; also states pin caps are not included");
+    assert!(
+        s.contains("*DATE"),
+        "required by the standard, whatever we think of it"
+    );
+    assert!(
+        s.contains("*DESIGN_FLOW"),
+        "required; also states pin caps are not included"
+    );
 
     // Reproducibility is preserved by making the stamp FIXED, not by dropping the field.
     let again = render("counter", &Units::default(), None, &[net()], &[]);
     assert_eq!(s, again, "output must stay byte-identical across runs");
-    assert!(!s.contains("1970-01-01T"), "a fixed stamp, in the format the grammar expects");
+    assert!(
+        !s.contains("1970-01-01T"),
+        "a fixed stamp, in the format the grammar expects"
+    );
 }
 
 #[test]
@@ -122,4 +131,91 @@ fn native_conn_hookup_direction_and_cin() {
     assert!(s.contains(":CLK I *L 3"), "spef:\n{s}");
     // net cap grew by the 3 fF load Cin (0.45 wire + 3.0)
     assert!(s.contains("*D_NET *1 3.45"), "spef:\n{s}");
+}
+
+/// Every `*<id>` in the body must resolve to an entry in `*NAME_MAP`.
+///
+/// This is the invariant behind four separate defects, each of which produced a *different*
+/// symptom in a different reader — `*0:clk_i` (an id below the map's base), a `usize::MAX`
+/// sentinel leaking into a coupling label, an instance interned that names nothing, a port
+/// spelled as a reference. Asserting the specific symptoms would have caught none of the others,
+/// so assert the rule: a leading `*` promises the reader a name-map lookup, and every such
+/// promise here must be keepable.
+///
+/// Our own reader never had to check, which is exactly why our own tests never caught it —
+/// only feeding the output back through OpenRCX did.
+fn assert_every_reference_resolves(s: &str) {
+    let mut map_ids = std::collections::BTreeSet::new();
+    let mut in_map = false;
+    for line in s.lines() {
+        if line.starts_with("*NAME_MAP") {
+            in_map = true;
+            continue;
+        }
+        if in_map {
+            if line.starts_with('*') && line[1..].starts_with(|c: char| c.is_ascii_digit()) {
+                if let Some((id, _)) = line[1..].split_once(' ') {
+                    map_ids.insert(id.to_string());
+                }
+                continue;
+            }
+            if line.trim().is_empty() {
+                continue;
+            }
+            in_map = false; // the map ends at the first non-entry
+        }
+        // Skip quoted header values, which may legitimately contain anything.
+        if line.starts_with('*') && line.contains('"') {
+            continue;
+        }
+        for tok in line.split_whitespace() {
+            let Some(body) = tok.strip_prefix('*') else {
+                continue;
+            };
+            // Section keywords (`*CAP`, `*D_NET`, …) are not references.
+            let id: String = body.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if id.is_empty() {
+                continue;
+            }
+            assert!(
+                map_ids.contains(&id),
+                "`{tok}` references name-map id {id}, which is not in the map\n  in: {line}"
+            );
+        }
+    }
+    assert!(!map_ids.is_empty(), "the scan found no name map at all");
+}
+
+#[test]
+fn every_name_map_reference_resolves() {
+    let s = render("counter", &Units::default(), None, &[net()], &[]);
+    assert_every_reference_resolves(&s);
+}
+
+#[test]
+fn a_port_is_never_written_as_a_name_map_reference() {
+    // DEF spells a top-level port connection with the pseudo-instance `PIN`. It is not an
+    // instance and is deliberately never interned, so any `*<id>` built from it dangles.
+    let with_port = NetParasitics {
+        name: "clk".into(),
+        pins: vec![("PIN".into(), "clk_i".into()), ("ff0".into(), "CLK".into())],
+        res_ohm: 10.0,
+        cap_ff: 0.4,
+    };
+    let s = render("counter", &Units::default(), None, &[with_port], &[]);
+
+    assert!(
+        s.contains("*P clk_i I"),
+        "the connection is a port declaration"
+    );
+    assert!(
+        !s.contains(":clk_i"),
+        "the port is its own node — `clk_i`, never `<something>:clk_i`\n{s}"
+    );
+    // Not a bare `contains("PIN")` — `*DESIGN_FLOW "… PIN_CAP NONE"` legitimately contains it.
+    assert!(
+        !s.contains("PIN:") && !s.contains(" PIN "),
+        "the DEF placeholder names nothing and must not reach the file as an instance\n{s}"
+    );
+    assert_every_reference_resolves(&s);
 }

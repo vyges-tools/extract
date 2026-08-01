@@ -113,6 +113,30 @@ pub fn render_json(design: &str, nets: &[NetParasitics], couplings: &[CouplingCa
     s
 }
 
+/// DEF spells a top-level port connection with the pseudo-instance `PIN`, which names nothing.
+fn is_port(inst: &str) -> bool {
+    inst == "PIN"
+}
+
+/// A port carries no name-map id, because it is not an instance.
+const NOT_INTERNED: usize = usize::MAX;
+
+/// Spell one node of an RC network the way a SPEF reader resolves it.
+///
+/// **A leading `*` means "name-map reference".** That is the whole of the convention, and every
+/// node-reference defect this writer has had came from getting it wrong in one direction or the
+/// other — a port written `*0:clk_i` (an id that is not in the map), or `*<usize::MAX>:tl_i[74]`.
+/// So labels are built here, complete with their prefix or deliberately without one, and the
+/// emission sites never add one. A caller that concatenates `*` onto the result is a bug.
+fn node_label(iid: usize, pin: &str) -> String {
+    if iid == NOT_INTERNED {
+        // A port is its own node and is written literally: `clk_i`, not `*<id>:clk_i`.
+        pin.to_string()
+    } else {
+        format!("*{iid}:{pin}")
+    }
+}
+
 /// Render a complete SPEF using the lumped **star** topology for every net (the
 /// fallback when no routing geometry is available). Equivalent to
 /// [`render_distributed`] with all trees `None`.
@@ -165,15 +189,17 @@ pub fn render_distributed(
     //
     // Both were found by reading our own output back through OpenROAD; neither is visible to a
     // test that parses our SPEF with our own reader.
-    let is_port = |inst: &str| inst == "PIN";
-    const NOT_INTERNED: usize = usize::MAX; // ports carry no name-map id
     let pin_ids: Vec<Vec<(usize, String)>> = nets
         .iter()
         .map(|net| {
             net.pins
                 .iter()
                 .map(|(inst, pin)| {
-                    let id = if is_port(inst) { NOT_INTERNED } else { nm.intern(inst) };
+                    let id = if is_port(inst) {
+                        NOT_INTERNED
+                    } else {
+                        nm.intern(inst)
+                    };
                     (id, pin.clone())
                 })
                 .collect()
@@ -185,21 +211,12 @@ pub fn render_distributed(
     // real node on both sides regardless of each net's topology.
     let rep_label = |n: usize| -> String {
         match trees.get(n).and_then(|t| t.as_ref()) {
+            // A coupling entry that names an instance which does not exist is how OpenRCX ends
+            // up dereferencing a null and **segfaulting**, so this is not cosmetic; found by
+            // bisecting our own SPEF against `diff_spef`.
             Some(_) if !pin_ids[n].is_empty() => {
                 let (iid, pin) = &pin_ids[n][0];
-                // A PORT is its own node — `tl_i[74]`, not `<inst>:<pin>`. It has no name-map
-                // id because it is not an instance, and naming one anyway is how a coupling
-                // entry ends up pointing at an instance that does not exist. OpenRCX resolves
-                // every such reference and **segfaults** when it cannot, so this is not a
-                // cosmetic difference; found by bisecting our own SPEF against `diff_spef`.
-                if *iid == NOT_INTERNED {
-                    // A port is written literally. The leading `*` marks a NAME-MAP REFERENCE,
-                    // so prefixing one here asks the reader to look up an id named `tl_i[74]`
-                    // — which OpenRCX does, and segfaults on.
-                    pin.clone()
-                } else {
-                    format!("*{iid}:{pin}")
-                }
+                node_label(*iid, pin)
             }
             Some(_) => format!("*{}:0", net_ids[n]), // pinless tree -> first internal node
             None => format!("*{}", net_ids[n]),      // star root
@@ -289,7 +306,6 @@ pub fn render_distributed(
         s.push('\n');
     }
 
-
     for (n, net) in nets.iter().enumerate() {
         let nid = net_ids[n];
         let cpl = coupling_total.get(&net.name).copied().unwrap_or(0.0);
@@ -339,16 +355,17 @@ pub fn render_distributed(
 
         s.push_str("*CAP\n");
         let mut ci = 0;
+        // Labels arrive fully formed — see `node_label`. Do NOT add a `*` here.
         for (n_, c) in &caps {
             ci += 1;
-            s.push_str(&format!("{ci} *{n_} {}\n", val(*c)));
+            s.push_str(&format!("{ci} {n_} {}\n", val(*c)));
         }
         // per-load pin Cin, grounded at the pin node (keeps Σ*CAP = *D_NET cap)
         for (k, (iid, pin)) in pin_ids[n].iter().enumerate() {
             let cap = hk[k].1;
             if cap > 0.0 {
                 ci += 1;
-                s.push_str(&format!("{ci} *{iid}:{pin} {}\n", val(cap)));
+                s.push_str(&format!("{ci} {} {}\n", node_label(*iid, pin), val(cap)));
             }
         }
         // coupling caps listed under net A, between A's and B's representative nodes
@@ -370,7 +387,7 @@ pub fn render_distributed(
         if !res_lines.is_empty() {
             s.push_str("*RES\n");
             for (i, (a, b, ohm)) in res_lines.iter().enumerate() {
-                s.push_str(&format!("{} *{a} *{b} {}\n", i + 1, val(*ohm)));
+                s.push_str(&format!("{} {a} {b} {}\n", i + 1, val(*ohm)));
             }
         }
 
@@ -402,8 +419,18 @@ fn emit_tree(
     };
     let label = |i: usize| -> String {
         match &t.nodes[i].pin {
-            Some((inst, pin)) => format!("{}:{}", nm.id(inst).unwrap_or(0), pin),
-            None => format!("{nid}:{i}"),
+            // `nm.id` is None for exactly two things: a PORT, whose instance side is DEF's `PIN`
+            // placeholder and is deliberately never interned, and an instance that somehow never
+            // reached the name map — a bug. Both used to fall through `unwrap_or(0)` to `*0:<pin>`,
+            // a reference to an id that does not exist, which OpenRCX resolves and reports as
+            // `spef inst not found in db`. Ports take the literal spelling; anything else falls
+            // back to its own name, which at least names something real.
+            Some((inst, pin)) if is_port(inst) => node_label(NOT_INTERNED, pin),
+            Some((inst, pin)) => match nm.id(inst) {
+                Some(iid) => node_label(iid, pin),
+                None => format!("{inst}:{pin}"),
+            },
+            None => format!("*{nid}:{i}"),
         }
     };
     let mut caps: Vec<(String, f64)> = Vec::new();
@@ -430,29 +457,29 @@ fn emit_tree(
 fn emit_star(nid: usize, pins: &[(usize, String)], g: f64, r: f64) -> (CapLines, ResLines) {
     let mut caps: Vec<(String, f64)> = Vec::new();
     let mut res_lines: Vec<(String, String, f64)> = Vec::new();
-    let node = |iid: usize, pin: &str| format!("{iid}:{pin}");
+    let node = node_label;
 
     if r <= 0.0 {
-        caps.push((format!("{nid}"), g)); // single lump
+        caps.push((format!("*{nid}"), g)); // single lump
     } else if pins.is_empty() {
-        caps.push((format!("{nid}"), g / 2.0));
-        caps.push((format!("{nid}:far"), g / 2.0));
-        res_lines.push((format!("{nid}"), format!("{nid}:far"), r));
+        caps.push((format!("*{nid}"), g / 2.0));
+        caps.push((format!("*{nid}:far"), g / 2.0));
+        res_lines.push((format!("*{nid}"), format!("*{nid}:far"), r));
     } else {
         let (diid, dpin) = &pins[0]; // driver = pin 0
         let dnode = node(*diid, dpin);
         caps.push((dnode.clone(), g / 2.0)); // near half
         let sinks = &pins[1..];
         if sinks.is_empty() {
-            caps.push((format!("{nid}"), g / 2.0)); // far half at root
-            res_lines.push((format!("{nid}"), dnode, r));
+            caps.push((format!("*{nid}"), g / 2.0)); // far half at root
+            res_lines.push((format!("*{nid}"), dnode, r));
         } else {
-            res_lines.push((format!("{nid}"), dnode, r / 2.0)); // trunk
+            res_lines.push((format!("*{nid}"), dnode, r / 2.0)); // trunk
             let k = sinks.len() as f64;
             for (siid, spin) in sinks {
                 let sn = node(*siid, spin);
                 caps.push((sn.clone(), (g / 2.0) / k));
-                res_lines.push((format!("{nid}"), sn, r / 2.0 / k)); // branch
+                res_lines.push((format!("*{nid}"), sn, r / 2.0 / k)); // branch
             }
         }
     }
