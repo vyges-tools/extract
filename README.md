@@ -233,70 +233,64 @@ Scope here is **physical RC extraction**. Per-net field-solve accuracy (the ±40
 analytic ceiling below) and analog *functional/timing* sign-off remain external/
 research-grade work.
 
-## Current state (2026-05-31)
+## Current state (2026-08-01)
 
-**v1** is a **rule-based** extractor with **lateral coupling capacitance** from
-segment adjacency: grounded R/C per net plus per-net-pair coupling caps, emitted
-in SPEF as a **distributed RC tree built from the routing geometry** — routing
-vertices become nodes, wire segments become resistors with end-split caps, and via
-stacks become resistors between the per-layer sub-nodes, so the SPEF carries genuine
-internal wire-junction nodes (not a star). Node caps and resistances are scaled back
-to the calibrated per-net totals, so the distributed model adds topology without
-re-correlating magnitudes; a net with no usable geometry falls back to a lumped star
-(totals include coupling on both nets). Coupling has both a **lateral** term
-(edge-to-edge gap when a tech LEF supplies routing widths, centerline otherwise)
-and an **inter-layer** crossover term (areal, over footprint overlap). Resistance is
-**width-dependent** when the deck supplies a per-layer sheet resistance (`R = rsheet ×
-len / width`, the width taken from a per-segment non-default rule (`NONDEFAULTRULE` /
-`TAPERRULE`) when one applies, else the LEF), versus the width-blind `res × len`.
-Coupling extraction is spatially indexed (a uniform grid), so cost scales with routed area
-rather than net-count squared. Runs fully offline, no external deps, 45 tests green.
-Enough to feed STA/SI and to validate the whole `def → spef → timing` seam end to end.
+**v1** is a **rule-based** extractor: grounded R/C per net plus per-net-pair coupling caps,
+emitted in SPEF as a **distributed RC tree built from the routing geometry** — routing vertices
+become nodes, wire segments become resistors with end-split caps, and via stacks become resistors
+between the per-layer sub-nodes, so the SPEF carries genuine internal wire-junction nodes rather
+than a star. Segments are split wherever another vertex of the net lands mid-span (a via landing,
+a same-layer T-junction), so **every net is emitted as one connected RC network**; a net whose
+geometry will not resolve into one falls back to a lumped star and is counted, not silently
+degraded. Node caps and resistances scale back to the calibrated per-net totals, so topology is
+added without re-correlating magnitudes. Resistance is **width-dependent** when the deck supplies
+a per-layer sheet resistance (`R = rsheet × len / width`), else the width-blind `res × len`.
+Coupling extraction is spatially indexed, so cost scales with routed area rather than
+net-count squared. Runs fully offline, no external deps, 76 tests green.
 
-**Correlated against OpenRCX** on a real routed sky130 block (the M0 counter, 45
-signal nets, LEF-derived rules from `sky130_fd_sc_hd__nom.tlef`): raw first-principles
-rules over-estimate total net cap by ~1.39× (consistent, not random — 45/45 nets
-match, no correctness defect); the over-count is dominated by the rule-based lateral
-coupling term, and **calibrating it against the golden lands the block total within
-~2 % and the per-net cap within ±25 %**. That ±25 % per-net spread is the rule-based
-ceiling (real neighbor distances/density a per-µm coefficient can't resolve) — which
-is exactly what the field-solve work below closes.
+### Accuracy — calibrated on a set, scored on a block held out of it
 
-**Field kernel (v1).** An `eps_r <value>` rule turns on a geometry-derived
-**2.5-D coupling kernel** — sidewall parallel-plate `Cc = eps_r·eps0·T/gap` from the
-LEF metal **thickness** and the real edge-to-edge **gap** — replacing the six
-hand-tuned per-layer coupling coefficients with one physical parameter (and fixing
-their inverted layer trend: a taller sidewall now correctly couples *more*).
-Calibrated against the OpenRCX golden it lands the counter total at 0.99× with a
-comparable per-net spread (±~40%) — i.e. it recovers the hand-calibrated accuracy
-from first principles with one knob and correct physics, so it generalises. The
-effective `eps_r` (~1.45, below the physical ~3.9) shows the bare parallel-plate
-over-states coupling. A **fringe-corrected** coupling is available too: with per-layer
-`height <um>` rules the kernel applies the Sakurai-style ground-competition fall-off
-`exp(-4S/(S+8.01·H))` (coupling falls faster than `1/S` once spacing passes the metal
-height, and taller metals couple more) instead of the bare plate.
+The sky130A deck is fitted against the foundry-reference extractor (OpenROAD **OpenRCX**) on
+**10 routed sky130 blocks**, each scored against the SPEF its own OpenLane run produced.
+`fft_ctrl_tlul` (14 238 nets) was **held out of every fit** and scored only afterwards:
 
-**Conditional ground-cap shielding** (`shield_k <0..1>`): a net's coupling is field
-that would otherwise be grounded fringe, so the grounded cap is reduced by
-`shield_k · Cc_net` (charge conservation) — making it neighbour-dependent. At
-`shield_k = 0.5` it lets the effective `eps_r` rise from 1.45 toward the physical
-~3.9 (2.3) while conserving charge, at comparable accuracy.
+| | ratio vs sign-off | per-net median |
+| --- | ---: | ---: |
+| ground capacitance | **0.98×** | 0.95 (p10 0.73, p90 1.20) |
+| coupling capacitance | **1.02×** | 1.04 (p10 0.83, p90 1.24) |
+| **total** | **1.00×** | — |
 
-**What the field-kernel study established (the honest ceiling).** Three independent levers —
-fringe-corrected coupling, a global fringe cut, and conditional shielding — were each
-measured against the OpenRCX golden, and **none tighten the ±40% per-net spread**. So
-that spread is the **rule-based / analytic ceiling**: the calibrated model nails the
-block total (~2 %) and is portable, but per-net accuracy below ±40 % depends on
-detailed local geometry (exact multi-neighbour configurations, density) that no
-global coefficient captures. Closing it requires **true per-net field solving**
-against the actual layout — the research-grade endpoint commercial sign-off extractors occupy.
+Ground is **neighbour-dependent**: `shield_k` reduces a net's grounded cap by `shield_k · Cc_net`,
+because field terminating on a neighbour is field that did not terminate on ground. Without it a
+deck fitted on a sparse block over-states ground on a dense one — which is what a single-block
+calibration used to do, by 1.37×.
 
-The road to sign-off grade is therefore a genuine **2.5-D field/pattern-matched
-solver** per net (not more global coefficients). The distributed RC tree is now
-built from the routing geometry; **moment-weighted** reduction and pin-access-accurate
-attachment (reading pin locations from LEF/DEF `PINS` rather than binding pins to the
-tree's leaf vertices) are the remaining tree refinements. Same file formats and CLI;
-same `run` command, no license.
+Regenerate or re-check any of this with `correlation/calibrate_coupling.py`,
+`correlation/calibrate_ground.py` and `correlation/decompose.py`; the monthly
+`correlation (sky130 block)` workflow re-runs the held-out comparison against a public design.
+
+### Known limits — read these before quoting a number
+
+- **Inter-layer (crossover) coupling is not modelled.** The engine supports an `interlayer`
+  coefficient, but **no shipped deck defines one**, so layer-to-layer coupling computes as zero
+  and the lateral coefficients absorb its effect on the totals. Fitting crossover explicitly was
+  tried and **not adopted**: it produces a coefficient ~25× a parallel-plate estimate and widens
+  the per-net spread rather than narrowing it. So the totals above are calibrated and validated,
+  but the **per-mechanism split is not** — do not read the lateral coefficient as a physical
+  sidewall capacitance, and treat the deck as an empirical fit over sky130 std-cell digital
+  routing rather than something that necessarily travels to very different layer usage.
+  Method and evidence: [`correlation/ground-vs-coupling.md`](correlation/ground-vs-coupling.md).
+- **Calibrated to OpenRCX, not to silicon.** A sign-off / certified per-fab deck is
+  silicon-correlated and NDA; it is never in this repo.
+- **Resistance has not been correlated at all.** It is the physical tech-LEF value, taken on
+  faith. Capacitance is two calibrated terms deep; R is not.
+- **li1 and met5 coupling are unfitted** — no li1 wire segments and almost no met5 routing exist
+  anywhere in the calibration set, so nothing constrains them. Both carry stated placeholders.
+- **Per-net spread is the rule-based ceiling.** A per-µm coefficient cannot resolve the exact
+  multi-neighbour geometry that a table-based or field-solving extractor does; closing the
+  remaining ±20 % needs true per-net field solving, not more global coefficients.
+
+Same file formats and CLI; same `run` command, no license.
 
 ## For researchers — open problems
 
