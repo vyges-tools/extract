@@ -65,6 +65,7 @@ fn coupling_dense_block() {
                 i as f64 * pitch,
             )],
             vias: 0,
+            via_points: Vec::new(),
         })
         .collect();
     let build_ms = t0.elapsed().as_secs_f64() * 1e3;

@@ -14,6 +14,7 @@ fn hnet(name: &str, x0: f64, x1: f64, y: f64) -> DefNet {
         pins: vec![],
         segments: vec![Segment::wire("met1", x0, y, x1, y)],
         vias: 0,
+        via_points: Vec::new(),
     }
 }
 
@@ -114,6 +115,7 @@ fn seg(layer: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> DefNet {
         pins: vec![],
         segments: vec![Segment::wire(layer, x0, y0, x1, y1)],
         vias: 0,
+        via_points: Vec::new(),
     }
 }
 
@@ -216,6 +218,7 @@ fn parallel_result_is_bit_identical_to_serial() {
                 Segment::wire("met1", 5.0, y, 11.0, y),
             ],
             vias: 0,
+            via_points: Vec::new(),
         });
     }
     let run = |threads: usize| -> Vec<vyges_extract::coupling::CouplingCap> {

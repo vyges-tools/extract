@@ -249,6 +249,13 @@ fn trace_cell(cell: &Cell, map: &LayerMap, dbu_per_um: f64) -> Vec<DefNet> {
             pins: Vec::new(),
             segments,
             vias: t.cut_count[nid],
+            // The tracer establishes connectivity by shape OVERLAP, so it knows how many cuts
+            // a net has but not, per net, where they are — `connect::trace` returns counts.
+            // The RC tree builder re-derives connectivity from coordinates and so cannot use
+            // that; without via locations it falls back to the lumped star for any net whose
+            // centerlines do not meet at shared points, and says so. Threading per-net cut
+            // centres out of the tracer is the fix, and is not done here.
+            via_points: Vec::new(),
         });
     }
     nets.sort_by(|a, b| a.name.cmp(&b.name));

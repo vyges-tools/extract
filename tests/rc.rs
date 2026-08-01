@@ -16,6 +16,7 @@ fn lumps_res_and_cap_over_segments_and_vias() {
             Segment::wire("met2", 0.0, 0.0, 3.0, 0.0),
         ],
         vias: 1,
+        via_points: Vec::new(),
     };
     let p = extract_net(&net, &rules(), &std::collections::BTreeMap::new()).unwrap();
     // R = 3*0.125 + 3*0.125 + 1*9.3 = 10.05 ; C = 3*0.078 + 3*0.072 = 0.45
@@ -30,6 +31,7 @@ fn unknown_layer_is_an_error_not_silent() {
         pins: vec![],
         segments: vec![Segment::wire("met9", 0.0, 0.0, 1.0, 0.0)],
         vias: 0,
+        via_points: Vec::new(),
     };
     assert!(extract_net(&net, &rules(), &std::collections::BTreeMap::new()).is_err());
 }
@@ -44,6 +46,7 @@ fn resistance_is_width_dependent_with_sheet_rho() {
         pins: vec![],
         segments: vec![Segment::wire("met1", 0.0, 0.0, 10.0, 0.0)],
         vias: 0,
+        via_points: Vec::new(),
     };
     let mut narrow = BTreeMap::new();
     narrow.insert("met1".to_string(), 0.5); // R = 0.1 * 10 / 0.5 = 2.0
@@ -73,6 +76,7 @@ fn ndr_segment_width_overrides_layer_default() {
         pins: vec![],
         segments: vec![seg.clone()],
         vias: 0,
+        via_points: Vec::new(),
     };
     let r_default = extract_net(&def_net, &rules, &widths).unwrap().res_ohm;
     assert!(
@@ -88,6 +92,7 @@ fn ndr_segment_width_overrides_layer_default() {
         pins: vec![],
         segments: vec![wide],
         vias: 0,
+        via_points: Vec::new(),
     };
     let r_wide = extract_net(&ndr_net, &rules, &widths).unwrap().res_ohm;
     assert!(

@@ -90,11 +90,52 @@ pub fn extract(job: &ExtractJob) -> Result<Extraction, ExtractError> {
         .collect::<Result<Vec<_>, _>>()?;
     lap!("per-net RC");
     // Distributed RC network per net (from routing geometry); None -> lumped star.
-    let trees: Vec<Option<RcNetwork>> = d
+    let outcomes: Vec<tree::Outcome> = d
         .nets
         .par_iter()
         .map(|n| tree::build_network(n, &r, &lef.widths))
         .collect();
+    // A net whose geometry is present but will not resolve into ONE network falls back to
+    // the star, which is connected by construction. That is the right output, but it is a
+    // defect upstream of here and must not vanish into the same silence as "this net has no
+    // routing" — so it is counted and said out loud.
+    let disconnected: Vec<&str> = d
+        .nets
+        .iter()
+        .zip(&outcomes)
+        .filter(|(_, o)| matches!(o, tree::Outcome::Disconnected { .. }))
+        .map(|(n, _)| n.name.as_str())
+        .collect();
+    if !disconnected.is_empty() {
+        use vyges_events::{Event, Severity};
+        vyges_events::emit(
+            &Event::new(
+                "vyges-extract",
+                Severity::Warn,
+                format!(
+                    "{} of {} net(s) had routing that would not resolve into a single RC \
+                     network — emitted as a lumped star instead (e.g. {})",
+                    disconnected.len(),
+                    d.nets.len(),
+                    disconnected
+                        .iter()
+                        .take(3)
+                        .copied()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            )
+            .with_code("EXTRACT-RC-DISCONNECTED")
+            .with_objects(
+                disconnected
+                    .iter()
+                    .take(20)
+                    .map(|n| format!("net:{n}"))
+                    .collect::<Vec<_>>(),
+            ),
+        );
+    }
+    let trees: Vec<Option<RcNetwork>> = outcomes.into_iter().map(|o| o.built()).collect();
     lap!("per-net trees");
     let couplings = coupling::extract_coupling(&d.nets, &r, &lef.widths, &lef.thicknesses);
     lap!("coupling");
@@ -134,7 +175,6 @@ pub fn run_to_spef(job: &ExtractJob) -> Result<String, ExtractError> {
     ))
 }
 
-
 /// Report how much of the layout the extraction inputs actually describe.
 ///
 /// Extraction's silent failure is not a file that fails to parse — it is a net with no routing
@@ -148,7 +188,11 @@ fn emit_input_coverage(d: &Def, rules: &RcRules, lef: &Lef, lef_given: bool) {
     use std::collections::BTreeSet;
     use vyges_events::{Event, Severity};
     let emit = |attention: bool, code: &str, msg: String| {
-        let sev = if attention { Severity::Warn } else { Severity::Info };
+        let sev = if attention {
+            Severity::Warn
+        } else {
+            Severity::Info
+        };
         vyges_events::emit(&Event::new("vyges-extract", sev, msg).with_code(code));
     };
 
@@ -205,6 +249,10 @@ fn emit_input_coverage(d: &Def, rules: &RcRules, lef: &Lef, lef_given: bool) {
     emit(
         !no_rule.is_empty(),
         "EXTRACT-LAYERS",
-        if notes.is_empty() { base } else { format!("{base} — {}", notes.join("; ")) },
+        if notes.is_empty() {
+            base
+        } else {
+            format!("{base} — {}", notes.join("; "))
+        },
     );
 }
