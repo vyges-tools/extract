@@ -95,7 +95,13 @@ That named the trigger in one pass, and then again after each fix. Four more def
 **Defect 4 was masking the crash.** It produced a clean `Unmatched spef and db` error that stopped
 OpenRCX before it reached the null dereference; fixing our bug is what exposed the segfault. So
 the honest reading is: the crash is an upstream robustness bug (`getDbInst` → `NameTable::getDataId`
-on an unresolved name, no null check), *and* every input that triggered it was malformed by us.
+with no null check), *and* every input that triggered it was malformed by us.
+
+⚠️ **Later correction:** an earlier version of this line attributed the crash to an *unresolved
+name*. That does not hold up — three minimisation attempts (an undefined name-map id, an id
+resolving to a net rather than an instance, an id absent from the map) each produce a clean
+`RCX-0044`/`RCX-0052` error instead of crashing. The unresolved reference was the defect that
+**masked** the crash, not the one that caused it. The trigger is still unminimised.
 Worth reporting upstream with the reproducer; not worth blaming for the delay.
 
 **Result: OpenRCX now reads our SPEF completely** —
@@ -287,5 +293,6 @@ sky130 block is the missing piece** — for this and for any future OpenROAD-sid
 ### Worth reporting upstream
 
 `diff_spef` is unreachable-by-design at its own documented output *and* has no test — which is
-exactly the condition in which the null-dereference on an unresolved name survived. Reproducer in
-hand for both.
+exactly the condition in which the null-dereference survived. We have a reproducer for the
+unreachable output; the crash is observed with a backtrace but **not minimised**, and the obvious
+candidates do not reproduce it.
