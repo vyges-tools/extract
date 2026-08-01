@@ -290,12 +290,55 @@ inflating the coupling a real extractor reports relative to what a sidewall mode
 neither of the two obvious candidates — an over-inclusive neighbour search, a missing crossover
 term — survives contact with the data.
 
+## Coupling to power: ruled out in one command
+
+The next candidate was that the reference books signal-to-power-rail adjacency as net-to-net
+coupling. This engine reads `d.nets` (DEF signal nets) and never sees `SPECIALNETS`, so a whole
+class of neighbour would be invisible and the lateral coefficient would have to compensate.
+
+**The reference SPEF contains no power nets at all** — zero matches for VPWR/VGND/VDD/VSS, and
+14 238 `*D_NET` records against the DEF's 14 286 signal nets and 2 special nets. OpenRCX put that
+field into grounded capacitance, which is what a rail that is an AC ground deserves. So there is
+no power coupling in the reference for our lateral term to be matching. Dead, at the cost of one
+`grep`.
+
+## What the pair-level comparison actually shows
+
+`pair_compare.py` compares the two files **net pair by net pair**, which is the only way to tell
+a model that is right from two errors that cancel. On the held-out block with the shipped deck:
+
+| | pairs | ours (fF) | reference (fF) |
+| --- | ---: | ---: | ---: |
+| found by both | 78 811 | 40 447 | 43 932 |
+| only ours | 52 364 | 5 707 | — |
+| only the reference | 10 029 | — | 1 110 |
+
+and on the shared pairs, per-pair ratio p10 0.59, **median 0.82**, p90 2.18.
+
+So the 1.02× total is **not** a clean match. It is:
+
+- **we are ~8 % low on the pairs we both find**, and 18 % low at the median;
+- **long on pairs** — 52 364 the reference does not report. Two thirds of them (35 018, 1 554 fF)
+  sit below OpenRCX's 0.1 fF coupling threshold and are *expected* to be absent, since it lumps
+  those into ground. The other **17 346 pairs, 4 153 fF (9 % of our coupling)** are adjacency we
+  claim and it does not;
+- **short on 10 029 pairs** worth 1 110 fF that it finds and we do not.
+
+Those roughly cancel. That is a materially better statement of the open problem than "the
+coefficient is 2.5× a parallel-plate bound": the coefficient is inflated **because it is fitted to
+recover a total from a pair set that is both too large and individually too small**.
+
+It also gives the next question a shape: the largest pairs we claim and the reference does not are
+tens of fF between long parallel nets (`_00990_`/`_01006_` at 31 fF). Either those wires are not
+adjacent the way our geometry thinks, or the reference is attributing that field somewhere else.
+One net, two files, decidable.
+
 ## Next
 
-1. **Find what the lateral coefficient is really carrying.** Not crossover, and not the
-   neighbour search. The next thing to check is whether the reference's coupling column includes
-   coupling to POWER (`SPECIALNETS`) — which this engine never sees, since it reads signal nets
-   only — because that would be a whole class of neighbour we attribute to the wrong place.
+1. **Take one large disputed pair apart.** `_00990_`/`_01006_` — 31 fF we report, nothing from the
+   reference. Establish from the DEF whether the adjacency is real. That answers whether we are
+   over-claiming geometry or the reference is booking it elsewhere, and it is one net rather than
+   a fitting campaign.
 3. **Escape hierarchical net names in the SPEF writer** (above) — small, and it is the difference
    between a name-keyed comparison working and silently dropping 5 % of nets.
 4. Resistance has never been correlated at all. Capacitance is now two terms deep; R is still the
