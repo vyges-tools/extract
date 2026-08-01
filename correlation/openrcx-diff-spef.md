@@ -6,7 +6,7 @@
   in OpenROAD as pinned, verified in source. What the exercise *did* produce: **eight** writer
   defects, all fixed, and — via its topology checks — **four extraction/reader defects that made
   7 % of nets emit an RC network in more than one piece**, now all at zero. Accuracy against the
-  sign-off SPEF is a separate, open question; see the last section.
+  sign-off SPEF is measured separately in [`ground-vs-coupling.md`](ground-vs-coupling.md).
 - **Companion:** [`openrcx-counter.md`](openrcx-counter.md) — the per-layer cap calibration this
   was meant to generalise.
 
@@ -230,24 +230,15 @@ lumped star, which is connected by construction — coarse and valid beats detai
 is counted and reported as `EXTRACT-RC-DISCONNECTED`, not folded into the same silence as "this
 net has no routing". On this block it fires zero times.
 
-## ⚠️ Now the accuracy question, which is open
+## ➡️ The accuracy question, now answered — see the companion doc
 
-With the topology right, a first like-for-like comparison against the design's **own sign-off
-OpenRCX SPEF** (`fft_ctrl_tlul.nom.spef`, `*C_UNIT 1 PF` — mind the units) on the `*D_NET`
-convention (coupling counted on both nets, no pin cap):
+With the topology right, the magnitudes are finally worth measuring, and the decomposition lives
+in **[`ground-vs-coupling.md`](ground-vs-coupling.md)**. In short: **ground 1.37×, coupling
+2.40×**, and **74 % of the excess is coupling** — the one term `calibrate.py` never fitted.
 
-| | fF |
-| --- | ---: |
-| vyges-extract — ground 83 071 + 2× coupling 107 920 | 298 910 |
-| OpenRCX sign-off | 105 696 |
-| **ratio** | **2.83×** |
-
-**This is an observation, not a correlation result, and 2.83 should not be quoted as one.**
-Coupling is the larger half of our total and the dominant suspect; the deck was fitted for total
-*ground* cap on a 50-net block that never routes above met3, and met4/met5 capacitance here is
-still an explicitly uncalibrated placeholder. An over-estimate is what
-[`openrcx-counter.md`](openrcx-counter.md)'s stated bounds predict. Closing it is deck-calibration
-work on a **set** of blocks, which is the next piece.
+⚠️ An earlier draft of this file quoted **2.83×** for the total. That was wrong: it compared their
+`*D_NET` sum (coupling counted once) against ours (counted on both nets). On a like-for-like rule
+the total gap is **1.81×**. The companion doc has the arithmetic.
 
 ## (Historical) The blocker, when it was still unexplained: `diff_spef` segfaults reading our file
 
@@ -283,9 +274,9 @@ sky130 block is the missing piece** — for this and for any future OpenROAD-sid
 
 ### Next, in order
 
-1. **Deck calibration on a set of blocks.** The topology is right; the magnitudes are 2.83× on
-   this block with coupling as the dominant suspect. This is what `openrcx-counter.md` has said
-   was needed since it was written, and it is now the only thing between here and a number.
+1. **Fit the coupling coefficient**, which [`ground-vs-coupling.md`](ground-vs-coupling.md)
+   shows is 74 % of the error and has never been calibrated against anything. Then the ground
+   term's additive component, then the deck across a set of blocks.
 2. Keep `diff_spef` as the **topology gate**. `RCX-0272`/`RCX-0374`/`RCX-0292` at zero is a real
    pass/fail even though no value comes with it, and it is cheap to re-run.
 3. Port the union-find check into the suite as a per-`*D_NET` assertion so a regression is caught
