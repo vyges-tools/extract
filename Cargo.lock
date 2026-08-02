@@ -169,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "vyges-extract"
-version = "0.1.18"
+version = "0.1.22"
 dependencies = [
  "rayon",
  "vyges-events",
