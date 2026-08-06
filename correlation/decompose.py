@@ -117,15 +117,28 @@ def parse_ref(path):
         parsed.append((net, couples))
         ground.setdefault(net, 0.0)
 
-    unresolved = 0
+    # ONE physical cap, TWO listings. A coupling cap belongs to two nets, and SPEF lets it
+    # appear in either block; OpenRCX writes it in BOTH, with the same value each time (a
+    # net's block is then self-contained). Crediting every listing therefore counts every
+    # coupling cap twice — which is exactly what this did, silently doubling every reference
+    # coupling value ever fitted or correlated against. Count each node pair once.
+    by_pair = defaultdict(list)
     for net, couples in parsed:
         for a, b, v in couples:
-            coupling[net] += v
+            by_pair[tuple(sorted((a, b)))].append((net, a, b, v))
+
+    unresolved = 0
+    for entries in by_pair.values():
+        # Either listing describes the same cap; take the first whose far end resolves.
+        for net, a, b, v in entries:
             other = owner.get(b) if owner.get(a) == net else owner.get(a)
             if other is None or other == net:
-                unresolved += 1
                 continue
+            coupling[net] += v
             coupling[other] += v
+            break
+        else:
+            unresolved += 1
     if unresolved:
         print(f"  note: {unresolved:,} coupling entries whose far end named no known net")
     return dict(ground), dict(coupling)

@@ -1,53 +1,65 @@
 # sky130A — open reference extraction deck for vyges-extract
 #
 # Capacitance is calibrated against the foundry-reference extractor (OpenROAD **OpenRCX**, nom
-# corner, rules.openrcx.sky130A.nom) across a **set of 10 sky130 blocks**, each scored against
-# the SPEF its own OpenLane run produced: CF_UART_APB, counter, fft_top, humidistat_apb,
-# mag_phase_apb, rv_plic_lite, spectrum_buffer, spi_host_lite, temp_sensor_apb, xbar_main.
+# corner, rules.openrcx.sky130A.nom) across a **set of 14 sky130 blocks**, each scored against the
+# SPEF its own OpenLane run produced. `fft_ctrl_tlul` (14 238 nets) was **held out of every fit**
+# and scored only afterwards:
 #
-# `fft_ctrl_tlul` (14 238 nets) was **held out of every fit** and scored only afterwards:
+#     ground 0.98x   coupling 1.00x   TOTAL 0.99x
+#     per-net median: ground 0.96 (p10 0.77, p90 1.20), coupling 1.00 (p10 0.89, p90 1.13)
 #
-#     ground 0.98x   coupling 1.02x   TOTAL 1.00x
-#     per-net median: ground 0.95 (p10 0.73, p90 1.20), coupling 1.04 (p10 0.83, p90 1.24)
+# Fitted by `correlation/calibrate_coupling.py`, then ground by `correlation/calibrate_ground.py`,
+# in that order — `shield_k` multiplies OUR coupling, so it cannot be fitted until the coupling
+# column is trustworthy, or you are fitting one error against another.
 #
-# Fitted by `correlation/calibrate_coupling.py` then `correlation/calibrate_ground.py`, in that
-# order — `shield_k` multiplies OUR coupling, so it cannot be fitted until the coupling column is
-# trustworthy, or you are fitting one error against another. See correlation/ground-vs-coupling.md.
+# ── 2026-08-06: the coupling column halved, and now means what its name says ────────────
+# This deck previously carried met1 = 0.21941 fF/um, ~2x any value a single sidewall pair can
+# have, and said so in this header. The cause was NOT the model. OpenRCX writes every coupling
+# cap into BOTH nets' SPEF blocks (`extSpef::writeSrcCouplingCaps` / `writeTgtCouplingCaps`), and
+# our correlation harness credited every listing — so every reference coupling value the deck was
+# ever fitted against was doubled, and the deck doubled with it. Ratios looked right the whole
+# time because both sides were inflated equally.
+#
+# The harness now counts each cap once (`correlation/decompose.py`), and two mechanisms were
+# corrected in the engine at the same time (see `README.md` → Known limits):
+#
+#   * the fall-off is the layer's CHARACTERISED curve, not 1/s — see `couple_shape` below;
+#   * a wire couples only to what it can SEE, with shadowing resolved run-length by run-length,
+#     and the power grid taking part as metal that blocks but never couples.
+#
+# The result is a coupling column that lands on the reference's own characterised values:
+#
+#     layer   this deck   OpenRCX characterised   ratio
+#     met1      0.09320          0.1055           0.88x
+#     met2      0.10917          0.1045           1.04x
+#     met3      0.11205          0.1103           1.02x
 #
 # ── shield_k — why ground is not just a per-um number ──────────────────────────────────
 # Field that terminates on a neighbour is field that did not terminate on ground, so a net's
 # grounded cap is reduced by `shield_k * Cc_net`. Without it a deck fitted on a sparse block
-# over-states ground on a dense one — the previous deck tracked `counter` to 0.997 and ran 1.37x
+# over-states ground on a dense one — an earlier deck tracked `counter` to 0.997 and ran 1.37x
 # over on a real block, with a +0.94 correlation between a net's coupling-to-ground ratio and its
-# error. `Cc_net` here counts a net's coupling from BOTH sides, matching `engine.rs`; expressed
-# against coupling counted once the same fraction reads ~0.36.
+# error. `Cc_net` counts a net's coupling from BOTH sides, matching `engine.rs`.
 #
-# ── Known bound: the coupling coefficient is right in total, unexplained per mechanism ──
-# At minimum spacing the fitted met1 lateral coupling works out to ~0.154 fF/um against ~0.060
-# for an ideal sidewall parallel plate and ~0.077 for a fringe-corrected one — **~2.5x a value
-# a single sidewall pair should not exceed**. The deck reproduces OpenRCX's per-net coupling
-# across eleven blocks anyway, so something real is being counted by a coefficient that does not
-# mean what its name says.
-#
-# The obvious candidate was crossover: this deck defines no `interlayer` coefficients, so
-# layer-to-layer coupling is computed as ZERO and the lateral term could be absorbing it. That
-# was TESTED and is unresolved, not confirmed. Fitting lateral and crossover jointly
-# (`calibrate_coupling.py`, which supports `interlayer` terms) drives every significant
-# crossover pair to 0.0 and changes the held-out block by nothing (median 1.04 -> 1.06, slightly
-# worse). But that is not evidence crossover is negligible: the two columns are **0.93-0.96
-# correlated** on this set (`correlation/collinearity.py`), so the fit cannot separate them.
-#
-# So: the totals are calibrated and validated; the mechanism is not established. Treat the
-# coefficient as an empirical fit over sky130 std-cell digital routing, and do NOT assume it
-# travels to a design with markedly different layer usage. Settling it needs a block whose
-# crossover-to-lateral ratio differs enough to break the collinearity — which is why a
-# non-std-cell held-out block is the next thing worth having, rather than more fitting.
+# `shield_k` is carried over from the previous calibration, DOUBLED, so the amount subtracted is
+# unchanged now that the coupling column has halved. Re-fitting it from scratch was tried and
+# scored worse on the held-out block (ground total 0.89x against 0.98x), so the algebraic carry
+# is what ships. The ground columns are unchanged from the previous calibration.
 #
 # ── Unconstrained layers ───────────────────────────────────────────────────────────────
-# li1 is UNFITTED (0 constraining nets): sky130 routing uses li1 only for via landings, so no
-# li1 wire segment appears anywhere in the set. met4/met5 carry met3's fitted values (187 and 0
-# nets). A least-squares fit returns 0.0 for an unconstrained layer, which would silently switch
-# that layer off; both scripts refuse coefficients under 200 nets and carry a stated placeholder.
+# li1 (0 constraining nets — sky130 routing uses li1 only for via landings) and met5 (22) cannot
+# be fitted from this corpus. They carry OpenRCX's own characterised value for that layer rather
+# than a neighbouring layer's fitted one; met2 and met3 land within 4% of characterised, so that
+# is a defensible prior. met4 IS fitted, but on only 1 659 nets, and sits at 1.48x characterised —
+# treat it as thin rather than settled.
+#
+# ── Known bound: cross-layer (diagonal) coupling is not modelled ────────────────────────
+# The reference reports 11 937 pairs on the held-out block that we do not, worth 637 fF — 2.9% of
+# its coupling. That is its DIAGUNDER mechanism: with `DIAGMODEL ON`, OpenRCX books field between
+# a wire and same-direction wires on OTHER layers as real coupling. This deck defines no
+# `interlayer` coefficients, and our `interlayer` term is an areal-overlap model that cannot
+# represent a diagonal-distance one — fitting it jointly produces a ~25x parallel-plate
+# coefficient, which is curve-fitting, not mechanism. Stated, not hidden.
 #
 # ── Resistance ─────────────────────────────────────────────────────────────────────────
 # Physical, from the sky130_fd_sc_hd nom tech LEF (RESISTANCE RPERSQ). Not calibrated against
@@ -57,33 +69,26 @@
 # deck is silicon-correlated and NDA, and is never in this repo.
 #
 # layer  res(ohm/um)  cap(fF/um)  coupling(fF/um)  s_ref(um)
-li1      12.8         0.060        0.030            0.17
-met1      0.125       0.12494      0.21941          0.14
-met2      0.125       0.09676      0.26618          0.14
-met3      0.047       0.13365      0.26458          0.30
-met4      0.047       0.13365      0.26458          0.30
-met5      0.0285      0.13365      0.26458          1.60
+li1      12.8         0.060        0.0795           0.17
+met1      0.125       0.12494      0.09320          0.14
+met2      0.125       0.09676      0.10917          0.14
+met3      0.047       0.13365      0.11205          0.30
+met4      0.047       0.13365      0.16041          0.30
+met5      0.0285      0.13365      0.0741           1.60
 via       9.3
-# ── couple_shape — measured, implemented, and NOT enabled here yet ─────────────────────
-# The engine now supports a per-layer `couple_shape` curve (see src/coupling.rs). The reference
-# extractor's characterised fall-off is NOT 1/s — met1 keeps 0.773 of its minimum-spacing
-# coupling at twice the spacing where 1/s gives 0.500 — and that is the whole of this deck's
-# known ~20 % per-pair deficit.
-#
-# Measured on openframe_project_wrapper (47 723 pairs, 26 057 shared with the reference):
-#
-#     without the curves   per-pair median 0.82   (p10 0.56, p25 0.76)   <- this deck today
-#     with the curves      per-pair median 1.33   (p10 1.01, p25 1.08)
-#
-# The curves are right and the SCALE is now wrong: the `coupling` column below was fitted to
-# compensate for the too-fast fall-off, so with the shape corrected it over-reports. Enabling
-# them requires re-fitting that column, and the 10-block corpus that produced it no longer
-# exists on the correlation host. Shipping the curves without the re-fit would trade a
-# characterised 0.82 for an uncharacterised 1.33.
-#
-# To enable: reconstruct the corpus, re-run correlation/calibrate_coupling.py, and expect the
-# met1 coefficient to fall from 0.21941 toward OpenRCX's characterised 0.1055 fF/um at 0.14 um.
-# See docs/extract/coupling-mechanism-open.md in vyges-tools-internal.
+
+# ── couple_shape — the characterised fall-off ──────────────────────────────────────────
+# Coupling does NOT fall off as 1/s. Measured from the reference deck's own DIST tables, met1
+# keeps 0.773 of its minimum-spacing coupling at twice the spacing where 1/s gives 0.500. Each
+# curve below is that layer's table, normalised to 1.0 at its first characterised sample, so it
+# scales the `coupling` column rather than replacing it. Interpolation follows the reference's own
+# `extDistRCTable::getComputeRC`: clamp below the first sample, linear between, 1/gap past the end.
+couple_shape li1  0.17:1.0000 0.34:0.6219 0.425:0.5414 0.51:0.4791 0.595:0.4275 0.68:0.3843 0.765:0.3481 0.85:0.3176 1.02:0.2697 1.36:0.2069 1.7:0.1688
+couple_shape met1 0.14:1.0000 0.28:0.7734 0.35:0.6550 0.42:0.6001 0.49:0.5448 0.56:0.4892 0.63:0.4376 0.7:0.4157 0.84:0.3715 1.12:0.2860 1.4:0.2500
+couple_shape met2 0.14:1.0000 0.28:0.7667 0.35:0.6513 0.42:0.5984 0.49:0.5451 0.56:0.4915 0.63:0.4419 0.7:0.4210 0.84:0.3790 1.12:0.2975 1.4:0.2626
+couple_shape met3 0.3:1.0000 0.6:0.7179 0.75:0.6595 0.9:0.6007 1.05:0.5415 1.2:0.4820 1.35:0.4220 1.5:0.3888 1.8:0.3493 2.4:0.2696 3:0.2298
+couple_shape met4 0.3:1.0000 0.6:0.7228 0.75:0.6668 0.9:0.6104 1.05:0.5535 1.2:0.4963 1.35:0.4387 1.5:0.4067 1.8:0.3685 2.4:0.2915 3:0.2517
+couple_shape met5 1.6:1.0000 3.2:0.5282 4:0.4311 4.8:0.3657 5.6:0.3181 6.4:0.2823 7.2:0.2544 8:0.2319 9.6:0.1976 12.8:0.1545 16:0.1285
 
 couple_cutoff 2.0     # um — ignore lateral coupling beyond this gap
-shield_k  0.18081     # grounded cap -= shield_k * Cc_net (both sides) — see above
+shield_k  0.36162     # grounded cap -= shield_k * Cc_net (both sides) — see above

@@ -71,13 +71,23 @@ def ref_pairs(path):
                 owner[resolve(f[1])] = net
                 owner[resolve(f[2])] = net
 
-    pairs, unresolved = defaultdict(float), 0
+    # ONE physical cap, TWO listings — OpenRCX writes each coupling cap in BOTH nets'
+    # blocks with the same value, so crediting every listing doubles it. Count each node
+    # pair once. (See the same fix in `decompose.parse_ref`.)
+    by_pair = defaultdict(list)
     for net, a, b, v in pending:
-        other = owner.get(b) if owner.get(a) == net else owner.get(a)
-        if other is None or other == net:
+        by_pair[tuple(sorted((a, b)))].append((net, a, b, v))
+
+    pairs, unresolved = defaultdict(float), 0
+    for entries in by_pair.values():
+        for net, a, b, v in entries:
+            other = owner.get(b) if owner.get(a) == net else owner.get(a)
+            if other is None or other == net:
+                continue
+            pairs[tuple(sorted((net, other)))] += v
+            break
+        else:
             unresolved += 1
-            continue
-        pairs[tuple(sorted((net, other)))] += v
     return pairs, unresolved
 
 

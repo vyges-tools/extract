@@ -2,19 +2,29 @@
 //!
 //! Coupling capacitance is the hardest, highest-value term in extraction: a
 //! wire couples to its neighbours, shifting both delay and signal integrity.
-//! v1 is a *geometric rule* model — two segments on the same layer, belonging
-//! to different nets, that run parallel and overlap, couple with
+//! Two segments on the same layer, belonging to different nets, that run parallel
+//! and overlap, couple with
 //!
 //! ```text
-//!   Cc = coupling_per_um[layer] * overlap_length * (s_ref / max(gap, s_ref))
+//!   Cc = coupling_per_um[layer] * visible_length * shape[layer](gap)
 //! ```
 //!
-//! ignored beyond `couple_cutoff`. `coupling_per_um` is the per-micron coupling
-//! at the reference spacing `s_ref`, falling off ~1/gap. The `gap` is the true
-//! **edge-to-edge** spacing when LEF routing widths are supplied
-//! (`gap = centerline_distance - (w_a + w_b)/2`); with no widths it degrades to
-//! the centerline distance. A field-solved 2.5-D kernel + golden-pattern fit is
-//! the remaining M5 upgrade, replacing this model behind the same SPEF output.
+//! ignored beyond `couple_cutoff`. `coupling_per_um` is the per-micron coupling at
+//! the reference spacing `s_ref`. The `gap` is the true **edge-to-edge** spacing when
+//! routing widths are known (`gap = centerline_distance - (w_a + w_b)/2`); with no
+//! widths it degrades to the centerline distance. `shape` is the layer's characterised
+//! fall-off when the deck carries one, else the analytic `s_ref / max(gap, s_ref)` —
+//! see [`couple_shape`], and note that real coupling does *not* fall off as 1/s.
+//!
+//! **`visible_length` is not the whole parallel run.** A wire couples to what it can
+//! see: metal between two wires is field that never arrives. Shadowing is resolved run
+//! length by run length — a neighbour hides exactly the length it spans, and the
+//! remainder still reaches wires further out. The power grid takes part as metal that
+//! blocks and never couples, because an AC ground takes field as *grounded* cap. This
+//! mirrors the reference extractor's own walk; see [`extract_coupling_full`].
+//!
+//! A field-solved 2.5-D kernel + golden-pattern fit is the remaining M5 upgrade,
+//! replacing the coefficient behind the same SPEF output.
 //!
 //! **Scaling.** Coupling is inherently local — two wires only couple within
 //! `couple_cutoff` — so we never test all net pairs. Every segment is binned into
@@ -46,25 +56,6 @@ pub struct CouplingCap {
     pub cap_ff: f64,
 }
 
-/// Parallel-run overlap length + perpendicular gap for two same-layer segments
-/// of the same orientation. `None` if different layer/orientation or no overlap.
-fn overlap_gap(a: &Segment, b: &Segment) -> Option<(f64, f64)> {
-    if a.layer != b.layer {
-        return None;
-    }
-    if a.is_horizontal() && b.is_horizontal() {
-        let ov = a.x0.max(a.x1).min(b.x0.max(b.x1)) - a.x0.min(a.x1).max(b.x0.min(b.x1));
-        let gap = (a.y0 - b.y0).abs();
-        (ov > 0.0).then_some((ov, gap))
-    } else if a.is_vertical() && b.is_vertical() {
-        let ov = a.y0.max(a.y1).min(b.y0.max(b.y1)) - a.y0.min(a.y1).max(b.y0.min(b.y1));
-        let gap = (a.x0 - b.x0).abs();
-        (ov > 0.0).then_some((ov, gap))
-    } else {
-        None
-    }
-}
-
 /// Overlap area of two axis-aligned rectangles (xmin, ymin, xmax, ymax).
 fn rect_overlap(a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)) -> f64 {
     let dx = (a.2.min(b.2) - a.0.max(b.0)).max(0.0);
@@ -72,53 +63,47 @@ fn rect_overlap(a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)) -> f64 {
     dx * dy
 }
 
-/// Coupling capacitance (fF) contributed by one segment pair — the physics, factored
-/// out of the pairing strategy. Same-layer parallel runs couple laterally (field
-/// kernel when a thickness/eps_r is known, else the rule coefficient); different
-/// layers couple areally over their footprint overlap. Returns 0 for pairs that
-/// don't couple (different orientation, beyond cutoff, no rule).
-fn pair_cap(
+/// Lateral coupling capacitance (fF) for a parallel run of `ov` µm at edge-to-edge
+/// spacing `gap` µm on `layer` — the physics, with the pairing strategy (which run
+/// length is visible at which spacing) decided by the caller. Field kernel when a
+/// thickness/eps_r is known, else the rule coefficient scaled by the layer's
+/// fall-off shape. Returns 0 when the layer has no coupling rule.
+fn lateral_cap(
+    layer: &str,
+    gap: f64,
+    ov: f64,
+    rules: &RcRules,
+    thickness: &dyn Fn(&str) -> f64,
+) -> f64 {
+    let Some(l) = rules.layer(layer) else {
+        return 0.0;
+    };
+    let t = thickness(layer);
+    if rules.eps_r > 0.0 && t > 0.0 {
+        // M5 field kernel: sidewall parallel-plate from real T + gap,
+        // fringe-corrected by the ground-competition fall-off when the
+        // layer height is known (else bare plate).
+        let h = rules.heights.get(layer).copied().unwrap_or(0.0);
+        crate::field::coupling_per_um_fringe(rules.eps_r, t, h, gap) * ov
+    } else if l.coupling_per_um > 0.0 {
+        l.coupling_per_um * ov * couple_shape(rules, layer, l, gap)
+    } else {
+        0.0
+    }
+}
+
+/// Inter-layer (crossover) coupling: an areal cap over the two footprints' overlap.
+/// Needs widths, so it is zero without a LEF. Nothing lies between the plates, so
+/// this term is exempt from the line-of-sight rule that governs lateral coupling.
+fn crossover_cap(
     sa: &Segment,
     sb: &Segment,
     rules: &RcRules,
-    width: &dyn Fn(&str) -> f64,
-    thickness: &dyn Fn(&str) -> f64,
+    seg_width: &dyn Fn(&Segment) -> f64,
 ) -> f64 {
-    if sa.layer == sb.layer {
-        // lateral coupling: parallel same-layer runs, edge-to-edge gap
-        let Some((ov, center_gap)) = overlap_gap(sa, sb) else {
-            return 0.0;
-        };
-        let Some(l) = rules.layer(&sa.layer) else {
-            return 0.0;
-        };
-        let gap = center_gap - width(&sa.layer);
-        if gap > rules.couple_cutoff {
-            return 0.0;
-        }
-        let t = thickness(&sa.layer);
-        if rules.eps_r > 0.0 && t > 0.0 {
-            // M5 field kernel: sidewall parallel-plate from real T + gap,
-            // fringe-corrected by the ground-competition fall-off when the
-            // layer height is known (else bare plate).
-            let h = rules.heights.get(&sa.layer).copied().unwrap_or(0.0);
-            crate::field::coupling_per_um_fringe(rules.eps_r, t, h, gap) * ov
-        } else if l.coupling_per_um > 0.0 {
-            // rule-based coefficient, scaled by the layer's fall-off shape.
-            l.coupling_per_um * ov * couple_shape(rules, &sa.layer, l, gap)
-        } else {
-            0.0
-        }
-    } else if let Some(coeff) = rules.interlayer(&sa.layer, &sb.layer) {
-        // inter-layer (crossover) coupling: areal cap over the footprint overlap
-        // (needs widths -> zero without a LEF).
-        coeff
-            * rect_overlap(
-                sa.footprint(width(&sa.layer)),
-                sb.footprint(width(&sb.layer)),
-            )
-    } else {
-        0.0
+    match rules.interlayer(&sa.layer, &sb.layer) {
+        Some(coeff) => coeff * rect_overlap(sa.footprint(seg_width(sa)), sb.footprint(seg_width(sb))),
+        None => 0.0,
     }
 }
 
@@ -181,7 +166,32 @@ pub fn extract_coupling(
     widths: &BTreeMap<String, f64>,
     thicknesses: &BTreeMap<String, f64>,
 ) -> Vec<CouplingCap> {
-    extract_coupling_capped(nets, rules, widths, thicknesses, max_coupling_pairs())
+    extract_coupling_full(nets, rules, widths, thicknesses, &[], max_coupling_pairs())
+}
+
+/// As [`extract_coupling`], with the power grid supplied as `blockers`.
+///
+/// Power wires never appear in the output — an AC ground takes field as *grounded*
+/// capacitance, not as coupling, which is why the reference SPEF contains no power
+/// nets at all. But they are metal, and metal blocks: the reference walks outward
+/// from a wire and a power rail ends that walk (`w2->isPower()`), so two signals on
+/// either side of a rail do not couple through it. On sky130 standard-cell rows a
+/// met1 rail runs through every row, so leaving them out is not a rounding error.
+pub fn extract_coupling_blocked(
+    nets: &[DefNet],
+    rules: &RcRules,
+    widths: &BTreeMap<String, f64>,
+    thicknesses: &BTreeMap<String, f64>,
+    blockers: &[Segment],
+) -> Vec<CouplingCap> {
+    extract_coupling_full(
+        nets,
+        rules,
+        widths,
+        thicknesses,
+        blockers,
+        max_coupling_pairs(),
+    )
 }
 
 /// Distinct-pair cap for the coupling accumulator when none is set via
@@ -209,6 +219,23 @@ pub fn extract_coupling_capped(
     thicknesses: &BTreeMap<String, f64>,
     max_pairs: usize,
 ) -> Vec<CouplingCap> {
+    extract_coupling_full(nets, rules, widths, thicknesses, &[], max_pairs)
+}
+
+/// Net index reserved for the power grid: metal that occludes but is never reported
+/// as a coupling partner.
+const POWER_NET: usize = usize::MAX;
+
+/// The general form behind [`extract_coupling`], [`extract_coupling_blocked`] and
+/// [`extract_coupling_capped`] — every knob explicit.
+pub fn extract_coupling_full(
+    nets: &[DefNet],
+    rules: &RcRules,
+    widths: &BTreeMap<String, f64>,
+    thicknesses: &BTreeMap<String, f64>,
+    blockers: &[Segment],
+    max_pairs: usize,
+) -> Vec<CouplingCap> {
     let width = |layer: &str| widths.get(layer).copied().unwrap_or(0.0);
     let thickness = |layer: &str| thicknesses.get(layer).copied().unwrap_or(0.0);
 
@@ -223,19 +250,42 @@ pub fn extract_coupling_capped(
             segs.push(SegRef { net: ni, seg: s });
         }
     }
+    // Power wires ride the same index space so the spatial grid and the line-of-sight
+    // walk see them, but carry a net id that can never be emitted.
+    for s in blockers {
+        segs.push(SegRef {
+            net: POWER_NET,
+            seg: s,
+        });
+    }
+
+    // A segment's own drawn width when it has one (an NDR route, or a PDN strap, which is
+    // an order of magnitude wider than the layer default) — else the layer's routing width.
+    let seg_width = |sg: &Segment| {
+        if sg.width_um > 0.0 {
+            sg.width_um
+        } else {
+            width(&sg.layer)
+        }
+    };
 
     // Cell size ≈ the interaction range: the cutoff plus the widest wire, so any
     // two segments that could couple land in the same or an adjacent cell. Floored
-    // to keep the grid from exploding when the cutoff is tiny.
-    let maxw = widths.values().copied().fold(0.0_f64, f64::max);
+    // to keep the grid from exploding when the cutoff is tiny. Power straps count
+    // toward "widest": a 1.6 µm strap binned as a 0.14 µm wire would go unseen.
+    let maxw = widths
+        .values()
+        .copied()
+        .chain(blockers.iter().map(|s| s.width_um))
+        .fold(0.0_f64, f64::max);
     let cell = (rules.couple_cutoff + maxw).max(MIN_CELL_UM);
     let pad = rules.couple_cutoff + maxw; // query halo so near pairs are never missed
     let bin = |v: f64| (v / cell).floor() as i64;
 
     // bin each segment's footprint cells (layer-independent grid; the layer check
-    // lives in pair_cap, and crossover coupling needs cross-layer neighbours)
+    // lives in the walk, and crossover coupling needs cross-layer neighbours)
     let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
-    let bbox = |sr: &SegRef| sr.seg.footprint(width(&sr.seg.layer));
+    let bbox = |sr: &SegRef| sr.seg.footprint(seg_width(sr.seg));
     for (id, sr) in segs.iter().enumerate() {
         let (xlo, ylo, xhi, yhi) = bbox(sr);
         for xb in bin(xlo)..=bin(xhi) {
@@ -245,33 +295,63 @@ pub fn extract_coupling_capped(
         }
     }
 
-    // ── line of sight ────────────────────────────────────────────────────────────────
-    // A wire couples to what it can SEE. The reference walks outward track by track and
-    // stops at the first blocker — `Enclosed`, an already-covered neighbour, or a power
-    // wire (`FindCoupleWiresOnTracks_down` in OpenRCX's extmeasure_couple.cpp). Coupling
-    // to a wire hidden behind another wire is field that never arrives.
+    // ── line of sight, by coverage ───────────────────────────────────────────────────
+    // A wire couples to what it can SEE, and what hides it is decided **run-length by
+    // run-length**, not wire by wire.
     //
-    // Without this we couple to everything inside `couple_cutoff` regardless of what lies
-    // between, which on a routed block produced ~20k pairs the reference does not report,
-    // concentrated exactly where there is most to hide behind. It went unnoticed while the
-    // fall-off was modelled as 1/s, because that damped the distant pairs that are wrong;
-    // with a characterised fall-off they stop being negligible.
+    // The reference (OpenRCX v1 `couplingFlow`, which is what `extract_parasitics` runs
+    // without `-version`) carries each source wire as a set of *uncovered* pieces and
+    // walks outward one track at a time — `Track::findOverlap` in `extCC.cpp`. Against
+    // each neighbour it splits the piece into (before, overlapping, after): the
+    // overlapping part is booked as coupling to that neighbour and is CONSUMED, while
+    // the before/after remainders stay uncovered and are carried to the next track out.
+    // The walk stops when nothing uncovered is left.
     //
-    // `visible[id]` holds, per segment, the nearest same-layer overlapping neighbour on
-    // each side. A pair survives if EITHER end can see the other — an asymmetry that
-    // arises when the two have different run extents.
-    // Orientation and centre-line of a segment on its perpendicular axis.
-    let horiz = |sg: &Segment| (sg.x1 - sg.x0).abs() >= (sg.y1 - sg.y0).abs();
-    let perp_centre = |sg: &Segment| if horiz(sg) { (sg.y0 + sg.y1) / 2.0 } else { (sg.x0 + sg.x1) / 2.0 };
+    // So a short neighbour occludes only the length it actually spans. Our first cut at
+    // this took the nearest neighbour per side and stopped, which over-pruned: the fit
+    // then had to raise the coupling coefficient to put back what was removed (met1
+    // 0.88× → 1.80× of the reference's own characterised value). Shadowing by coverage
+    // is the mechanism, and it is what this does.
+    //
+    // Direction: the reference books a pair once, from the lower wire looking up (the
+    // downward pass runs with `handleEmptyOnly`, which suppresses coupling and keeps
+    // only the ground bookkeeping). We do the same — walk one side, so each pair is
+    // emitted exactly once, by the segment below it.
+    //
+    // Only strictly axis-parallel segments take part; a via footprint has no run to
+    // couple over.
+    let horiz = |sg: &Segment| sg.is_horizontal();
+    let axial = |sg: &Segment| sg.is_horizontal() || sg.is_vertical();
+    let perp_centre = |sg: &Segment| {
+        if horiz(sg) {
+            (sg.y0 + sg.y1) / 2.0
+        } else {
+            (sg.x0 + sg.x1) / 2.0
+        }
+    };
     let run_span = |sg: &Segment| {
-        if horiz(sg) { (sg.x0.min(sg.x1), sg.x0.max(sg.x1)) } else { (sg.y0.min(sg.y1), sg.y0.max(sg.y1)) }
+        if horiz(sg) {
+            (sg.x0.min(sg.x1), sg.x0.max(sg.x1))
+        } else {
+            (sg.y0.min(sg.y1), sg.y0.max(sg.y1))
+        }
     };
 
-    let visible: Vec<Vec<usize>> = (0..segs.len())
+    // Per segment: the same-layer neighbours it can still see on its "up" side, each with
+    // the gap and the run length that reaches it. Empty for a power wire (metal that
+    // blocks but never couples) and for anything non-axial.
+    let visible: Vec<Vec<(usize, f64, f64)>> = (0..segs.len())
         .into_par_iter()
         .map(|id| {
             let sr = &segs[id];
             let sg = sr.seg;
+            if sr.net == POWER_NET || !axial(sg) {
+                return Vec::new();
+            }
+            let (a0, a1) = run_span(sg);
+            if a1 <= a0 {
+                return Vec::new();
+            }
             let (xlo, ylo, xhi, yhi) = bbox(sr);
             let mut cand: Vec<usize> = Vec::new();
             for xb in bin(xlo - pad)..=bin(xhi + pad) {
@@ -284,41 +364,61 @@ pub fn extract_coupling_capped(
             cand.sort_unstable();
             cand.dedup();
 
-            let (a0, a1) = run_span(sg);
-            let wa = if sg.width_um > 0.0 { sg.width_um } else { width(&sg.layer) };
+            let wa = seg_width(sg);
             let ca = perp_centre(sg);
-            // Nearest on each side: (gap, id).
-            let mut best: [Option<(f64, usize)>; 2] = [None, None];
+            // Everything on the up side that is close enough to matter, ordered by
+            // centre-line distance — the walk's track order.
+            let mut reach: Vec<(f64, f64, f64, f64, usize)> = Vec::new(); // (delta, b0, b1, gap, id)
             for o in cand {
                 if o == id {
                     continue;
                 }
                 let og = segs[o].seg;
-                // Only same-layer, same-orientation wires occlude one another.
-                if og.layer != sg.layer || horiz(og) != horiz(sg) {
+                // Only same-layer, same-orientation metal occludes or couples laterally.
+                if og.layer != sg.layer || !axial(og) || horiz(og) != horiz(sg) {
                     continue;
+                }
+                let delta = perp_centre(og) - ca;
+                if delta <= 0.0 {
+                    continue; // the other side's walk owns it
                 }
                 let (b0, b1) = run_span(og);
                 if b1 <= a0 || a1 <= b0 {
-                    continue; // no parallel run to couple over
+                    continue; // no parallel run
                 }
-                let wb = if og.width_um > 0.0 { og.width_um } else { width(&og.layer) };
-                let delta = perp_centre(og) - ca;
-                let gap = delta.abs() - (wa + wb) / 2.0;
+                let gap = delta - (wa + seg_width(og)) / 2.0;
+                // Past the cutoff a wire neither couples nor blocks, exactly as the
+                // reference's `inThreshold` test leaves the piece uncovered.
                 if gap > rules.couple_cutoff {
                     continue;
                 }
-                let side = usize::from(delta >= 0.0);
-                // A same-net wire still blocks: it is metal in the way, whether or not the
-                // pair would have been reported.
-                if best[side].map(|(g, _)| gap < g).unwrap_or(true) {
-                    best[side] = Some((gap, o));
+                reach.push((delta, b0, b1, gap, o));
+            }
+            // Ties (same track) cannot overlap in run, so any stable order does; sort on
+            // the full key anyway so the result never depends on grid iteration order.
+            reach.sort_unstable_by(|x, y| {
+                x.0.total_cmp(&y.0)
+                    .then_with(|| x.1.total_cmp(&y.1))
+                    .then_with(|| x.4.cmp(&y.4))
+            });
+
+            let mut uncovered: Vec<(f64, f64)> = vec![(a0, a1)];
+            let mut out: Vec<(usize, f64, f64)> = Vec::new();
+            for (_, b0, b1, gap, o) in reach {
+                let seen = visible_len(&uncovered, b0, b1);
+                if seen > 0.0 {
+                    // Same-net metal blocks just as well as anyone else's — it is metal in
+                    // the way — but a net does not couple to itself.
+                    if segs[o].net != sr.net && segs[o].net != POWER_NET {
+                        out.push((o, gap, seen));
+                    }
+                    occlude(&mut uncovered, b0, b1);
+                    if uncovered.is_empty() {
+                        break;
+                    }
                 }
             }
-            best.iter()
-                .filter_map(|b| b.map(|(_, o)| o))
-                .filter(|&o| segs[o].net != sr.net)
-                .collect()
+            out
         })
         .collect();
 
@@ -338,8 +438,27 @@ pub fn extract_coupling_capped(
     // once, at merge, so it bounds the true distinct-pair total rather than per band).
     let scan_band = |lo: usize, hi: usize| -> HashMap<(u32, u32), f64> {
         let mut acc: HashMap<(u32, u32), f64> = HashMap::new();
+        let add = |a: usize, b: usize, cc: f64, acc: &mut HashMap<(u32, u32), f64>| {
+            if cc > 0.0 {
+                let (ni, nj) = (a.min(b), a.max(b));
+                *acc.entry((ni as u32, nj as u32)).or_default() += cc;
+            }
+        };
         for id in lo..hi {
             let sr = &segs[id];
+            if sr.net == POWER_NET {
+                continue; // the grid takes field as ground, never as a coupling partner
+            }
+            // Lateral: exactly the run each neighbour can still see, at its own gap.
+            for &(other, gap, ov) in &visible[id] {
+                let cc = lateral_cap(&sr.seg.layer, gap, ov, rules, &thickness);
+                add(sr.net, segs[other].net, cc, &mut acc);
+            }
+            // Crossover: an overlap term with nothing between the plates, so it is exempt
+            // from line of sight and still needs the neighbour sweep.
+            if rules.interlayer.is_empty() {
+                continue;
+            }
             let (xlo, ylo, xhi, yhi) = bbox(sr);
             // gather candidate segment ids from the cells the padded footprint touches
             let mut cand: Vec<usize> = Vec::new();
@@ -354,22 +473,15 @@ pub fn extract_coupling_capped(
             cand.dedup();
             for other in cand {
                 // each unordered pair once (other > id); never self-couple a net
-                if other <= id || segs[other].net == sr.net {
-                    continue;
-                }
-                // Same-layer coupling is line-of-sight limited; cross-layer (crossover)
-                // is an overlap term with nothing between the plates, so it is exempt.
-                if sr.seg.layer == segs[other].seg.layer
-                    && !visible[id].contains(&other)
-                    && !visible[other].contains(&id)
+                if other <= id
+                    || segs[other].net == sr.net
+                    || segs[other].net == POWER_NET
+                    || sr.seg.layer == segs[other].seg.layer
                 {
                     continue;
                 }
-                let cc = pair_cap(sr.seg, segs[other].seg, rules, &width, &thickness);
-                if cc > 0.0 {
-                    let (ni, nj) = (sr.net.min(segs[other].net), sr.net.max(segs[other].net));
-                    *acc.entry((ni as u32, nj as u32)).or_default() += cc;
-                }
+                let cc = crossover_cap(sr.seg, segs[other].seg, rules, &seg_width);
+                add(sr.net, segs[other].net, cc, &mut acc);
             }
         }
         acc
@@ -429,9 +541,82 @@ pub fn extract_coupling_capped(
     out
 }
 
+/// How much of `[b0, b1)` is still uncovered — the run length over which a neighbour
+/// spanning that interval is actually in view. `uncovered` is sorted and disjoint.
+fn visible_len(uncovered: &[(f64, f64)], b0: f64, b1: f64) -> f64 {
+    uncovered
+        .iter()
+        .map(|&(u0, u1)| (u1.min(b1) - u0.max(b0)).max(0.0))
+        .sum()
+}
+
+/// Remove `[b0, b1)` from the uncovered set: a neighbour hides the run it spans and
+/// only that run, leaving the remainders visible to wires further out. Order and
+/// disjointness are preserved.
+fn occlude(uncovered: &mut Vec<(f64, f64)>, b0: f64, b1: f64) {
+    let mut out: Vec<(f64, f64)> = Vec::with_capacity(uncovered.len() + 1);
+    for &(u0, u1) in uncovered.iter() {
+        if b1 <= u0 || b0 >= u1 {
+            out.push((u0, u1)); // untouched
+            continue;
+        }
+        if u0 < b0 {
+            out.push((u0, b0));
+        }
+        if b1 < u1 {
+            out.push((b1, u1));
+        }
+    }
+    *uncovered = out;
+}
+
 /// Lower bound on grid cell size (um) — stops a near-zero cutoff from producing an
 /// enormous number of tiny cells.
 const MIN_CELL_UM: f64 = 1.0;
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::*;
+
+    /// A blocker in the middle leaves both ends visible — the len1/len3 split.
+    #[test]
+    fn a_middle_blocker_leaves_two_remainders() {
+        let mut un = vec![(0.0, 10.0)];
+        assert!((visible_len(&un, 4.0, 6.0) - 2.0).abs() < 1e-12);
+        occlude(&mut un, 4.0, 6.0);
+        assert_eq!(un, vec![(0.0, 4.0), (6.0, 10.0)]);
+        // A wire further out sees only what is left of the run.
+        assert!((visible_len(&un, 0.0, 10.0) - 8.0).abs() < 1e-12);
+    }
+
+    /// A blocker spanning past both ends leaves nothing — the walk terminates.
+    #[test]
+    fn a_spanning_blocker_leaves_nothing() {
+        let mut un = vec![(0.0, 10.0)];
+        occlude(&mut un, -1.0, 11.0);
+        assert!(un.is_empty());
+        assert_eq!(visible_len(&un, 0.0, 10.0), 0.0);
+    }
+
+    /// Blockers that miss the run entirely change nothing.
+    #[test]
+    fn a_disjoint_blocker_is_a_no_op() {
+        let mut un = vec![(0.0, 10.0)];
+        assert_eq!(visible_len(&un, 20.0, 30.0), 0.0);
+        occlude(&mut un, 20.0, 30.0);
+        assert_eq!(un, vec![(0.0, 10.0)]);
+    }
+
+    /// Coverage accumulates across several partial blockers without double-counting.
+    #[test]
+    fn successive_blockers_accumulate() {
+        let mut un = vec![(0.0, 10.0)];
+        occlude(&mut un, 0.0, 3.0);
+        occlude(&mut un, 2.0, 5.0); // overlaps the first — the shared part is not re-counted
+        assert_eq!(un, vec![(5.0, 10.0)]);
+        assert!((visible_len(&un, 0.0, 10.0) - 5.0).abs() < 1e-12);
+    }
+}
 
 #[cfg(test)]
 mod shape_tests {

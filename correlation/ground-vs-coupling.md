@@ -376,11 +376,77 @@ So the honest state is weaker than "the mechanism is wrong" and weaker than "eve
 reference's, missing 2.5 % of its coupling — plausibly the crossover we compute as zero), and the
 physical objection to the coefficient rests on a bound that does not clearly apply.**
 
+## Resolved, 2026-08-06 — and the largest single error was in this harness
+
+Everything above about "the coefficient is ~2.5× a parallel-plate bound" was chasing an artefact.
+**This harness was double-counting the reference.**
+
+OpenRCX writes each coupling cap into **both** nets' SPEF blocks, at full value, so that a net's
+block is self-contained — `extSpef::writeSrcCouplingCaps` and `writeTgtCouplingCaps`. Measured on
+`counter`: 350 coupling lines, 175 distinct caps, exactly 2.00 listings each; on `fft_ctrl_tlul`:
+268 936 lines, 134 468 caps. `decompose.parse_ref` credited both ends of **every listing**, so
+every reference coupling value in this document — and every coefficient ever fitted against one —
+was 2× the real value. Every published *ratio* still looked right, because the deck was fitted to
+the doubled reference and doubled with it. Two errors cancelling.
+
+Both readers now count each node pair once.
+
+Two model errors were corrected at the same time, both taken from the reference's source rather
+than inferred from measurements:
+
+1. **The fall-off is characterised, not `1/s`.** Each layer's `couple_shape` curve is that layer's
+   own DIST table, normalised to its first sample, interpolated as `extDistRCTable::getComputeRC`
+   does. met1 keeps 0.773 of its minimum-spacing coupling at twice the spacing; `1/s` says 0.500.
+   This was the uniform ~20 % per-pair deficit, in full.
+2. **A wire couples only to what it can see, shadowed by coverage.** The reference carries each
+   wire as a set of uncovered pieces and walks outward one track at a time; a neighbour consumes
+   exactly the run length it spans, and the remainder stays visible to wires further out
+   (`Track::findOverlap`). Power wires take part as metal that blocks and never couples — their
+   field is booked to ground, which is why the reference SPEF has no power nets. Without this we
+   reported 52 364 pairs the reference does not; with it, 387.
+
+### The check that needed no fitting
+
+Load OpenRCX's own characterised per-layer coefficients and curves into the deck, run our
+geometry, count the reference correctly:
+
+| block | shared pairs | ours fF | reference fF | p10 | median | p90 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `counter` | 94 | 13.8 | 13.5 | 0.87 | **0.98** | 1.33 |
+| `fft_ctrl_tlul` | 76 903 | 23 009 | 21 884 | 0.90 | **1.03** | 1.27 |
+
+Zero free parameters.
+
+### What the deck ships now
+
+Re-fitted on 14 blocks with `fft_ctrl_tlul` held out, the coupling coefficients land on the
+reference's own characterised values — met1 **0.0932** against **0.1055** (0.88×), met2 1.04×,
+met3 1.02× — and the held-out spread is the tightest of any configuration tried:
+
+| held-out `fft_ctrl_tlul`, coupling | p10 | median | p90 | met1 ÷ characterised |
+| --- | ---: | ---: | ---: | ---: |
+| previous deck (1/s, no visibility rule) | 0.83 | 1.04 | 1.24 | 2.08× |
+| **this deck** | **0.89** | **1.00** | **1.13** | **0.88×** |
+
+Ground is unchanged: the ground columns are carried over and `shield_k` is doubled, so the amount
+subtracted is the same now that the coupling column has halved (ground 0.98× total, median 0.96).
+Re-fitting ground from scratch was tried and scored worse on the held-out block (0.89× total), so
+the algebraic carry is what ships.
+
+**The lesson:** the discrepancy was a clean, gap-independent factor of ~2 with a tight spread, and
+it was read as physics for a month. When a gap is a constant factor, audit the comparison before
+the model.
+
 ## Next
 
-1. **Chase the uniform 20 % per-pair deficit**, which is now the single largest well-characterised
-   error and is invariant to every knob tried. It is a shape question — the `s_ref` clamp and the
-   `1/gap` fall-off — rather than a scale one, since scale is already fitted.
+1. **Cross-layer (diagonal) coupling.** The reference reports 11 937 pairs we do not, worth 2.9 %
+   of its coupling. Its mechanism is the `DIAGUNDER` tables under `DIAGMODEL ON`, which book field
+   between a wire and same-direction wires on other layers as real coupling, by diagonal distance.
+   Our `interlayer` term is an areal-overlap model and cannot represent it — which is why fitting
+   it jointly always produced a ~25× parallel-plate coefficient.
+2. **Ground has become the weaker axis** (p10 0.77 / p90 1.20 against coupling's 0.89 / 1.13).
+   One identified mechanism: the reference books rail-adjacent and sub-threshold field *to ground*,
+   and we now correctly exclude both from coupling without adding them anywhere.
 3. **Escape hierarchical net names in the SPEF writer** (above) — small, and it is the difference
    between a name-keyed comparison working and silently dropping 5 % of nets.
 4. Resistance has never been correlated at all. Capacitance is now two terms deep; R is still the

@@ -273,28 +273,34 @@ Regenerate or re-check any of this with `correlation/calibrate_coupling.py`,
 
 ### Known limits — read these before quoting a number
 
-- **Inter-layer (crossover) coupling is not modelled.** The engine supports an `interlayer`
+- **Cross-layer (diagonal) coupling is not modelled.** The engine supports an `interlayer`
   coefficient, but **no shipped deck defines one**, so layer-to-layer coupling computes as zero.
-  Measured against the reference this accounts for roughly **2.5 % of its coupling** — the pairs
-  it reports and we never find. Fitting crossover explicitly was tried and **not adopted**: it
-  produces a coefficient ~25× a parallel-plate estimate and widens the per-net spread rather than
-  narrowing it.
-- **The totals are calibrated and validated; the per-mechanism split is not.** Compared pair by
-  pair rather than in total, the deck is uniformly **~20 % low on the net pairs it shares with the
-  reference** and long on small ones, and the two roughly cancel. Do not read the lateral
-  coefficient as a physical sidewall capacitance, and treat the deck as an empirical fit over
-  sky130 std-cell digital routing rather than something that necessarily travels to very
-  different layer usage. Method and evidence:
+  Measured against the reference this accounts for roughly **2.9 % of its coupling** — 11 937
+  pairs on the held-out block, worth 637 fF, that it reports and we never find. The reference's
+  mechanism is its `DIAGUNDER` tables (`DIAGMODEL ON`), which book field between a wire and
+  same-direction wires on *other* layers as real coupling, as a function of diagonal distance.
+  Our `interlayer` term is an areal-overlap model and cannot represent that; fitting it jointly
+  produces a coefficient ~25× a parallel-plate estimate, which is curve-fitting rather than
+  mechanism.
+- **Coupling is a per-µm coefficient over a characterised fall-off, not a field solve.** The
+  fall-off shape and the neighbour-visibility rule are taken from the reference extractor's own
+  behaviour, and the fitted coefficients land within **0.88–1.04×** of that reference's
+  characterised per-layer values — so the coefficient does now mean roughly what its name says.
+  It is still a single number per layer: it cannot resolve the exact multi-neighbour geometry a
+  table-driven or field-solving extractor does. Method and evidence:
   [`correlation/ground-vs-coupling.md`](correlation/ground-vs-coupling.md).
 - **Calibrated to OpenRCX, not to silicon.** A sign-off / certified per-fab deck is
   silicon-correlated and NDA; it is never in this repo.
 - **Resistance has not been correlated at all.** It is the physical tech-LEF value, taken on
   faith. Capacitance is two calibrated terms deep; R is not.
 - **li1 and met5 coupling are unfitted** — no li1 wire segments and almost no met5 routing exist
-  anywhere in the calibration set, so nothing constrains them. Both carry stated placeholders.
+  anywhere in the calibration set, so nothing constrains them. Both carry the reference's own
+  characterised value for that layer as a stated prior. **met4 is fitted on only 1 659 nets** and
+  sits at 1.48× characterised: thin, not settled.
 - **Per-net spread is the rule-based ceiling.** A per-µm coefficient cannot resolve the exact
   multi-neighbour geometry that a table-based or field-solving extractor does; closing the
-  remaining ±20 % needs true per-net field solving, not more global coefficients.
+  remaining spread (coupling p10 0.89 / p90 1.13, ground p10 0.77 / p90 1.20 on the held-out
+  block) needs true per-net field solving, not more global coefficients.
 
 Same file formats and CLI; same `run` command, no license.
 

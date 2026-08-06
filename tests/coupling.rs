@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use vyges_extract::coupling::{extract_coupling, extract_coupling_capped};
+use vyges_extract::coupling::{extract_coupling, extract_coupling_blocked, extract_coupling_capped};
 use vyges_extract::def::{DefNet, Segment};
 use vyges_extract::rules::RcRules;
 
@@ -186,17 +186,25 @@ fn spatial_index_agrees_with_isolated_pairs_and_respects_line_of_sight() {
         }
     }
 
-    // 1. The index invents nothing and computes the same cap for what it does report.
+    // 1. The index invents nothing, and context can only ever REMOVE coupling: a pair
+    //    extracted in isolation is the upper bound on the same pair extracted in context.
     for c in &got {
         let w = isolated
             .get(&(c.a.clone(), c.b.clone()))
             .unwrap_or_else(|| panic!("indexed pair {}/{} absent from the isolated set", c.a, c.b));
-        assert!((c.cap_ff - w).abs() < 1e-12, "cap drift on {}/{}", c.a, c.b);
+        assert!(
+            c.cap_ff <= w + 1e-12,
+            "{}/{} reports {} in context, above its isolated {}",
+            c.a,
+            c.b,
+            c.cap_ff,
+            w
+        );
     }
 
     // 2. Line of sight actually bites: the wires are stacked 0.62 apart per layer and the
     //    cutoff reaches several of them, so without occlusion each would couple to every
-    //    neighbour in reach rather than the nearest on each side.
+    //    neighbour in reach rather than to what it can still see.
     assert!(
         got.len() < isolated.len(),
         "occlusion should remove hidden pairs: {} indexed vs {} isolated",
@@ -204,16 +212,104 @@ fn spatial_index_agrees_with_isolated_pairs_and_respects_line_of_sight() {
         isolated.len()
     );
 
-    // 3. The invariant that removal enforces: no net couples to more than two same-layer
-    //    neighbours — one visible on each side.
-    let mut degree: std::collections::BTreeMap<String, usize> = Default::default();
-    for c in &got {
-        *degree.entry(c.a.clone()).or_default() += 1;
-        *degree.entry(c.b.clone()).or_default() += 1;
-    }
-    for (net, d) in &degree {
-        assert!(*d <= 2, "{net} couples to {d} neighbours; at most one per side is visible");
-    }
+    // 3. Shadowing is by COVERAGE, not by rank: because these wires start at staggered x,
+    //    a nearer neighbour spans only part of the parallel run and the remainder still
+    //    reaches past it. So some pair must survive with strictly less than its isolated
+    //    cap — a rank rule would either keep a pair whole or drop it outright.
+    let partial = got.iter().any(|c| {
+        isolated
+            .get(&(c.a.clone(), c.b.clone()))
+            .is_some_and(|w| c.cap_ff < w - 1e-9)
+    });
+    assert!(
+        partial,
+        "no pair was partially shadowed — coverage is not being applied"
+    );
+}
+
+/// A neighbour hides the run it spans and no more. The reference carries the uncovered
+/// remainder outward to the next track (`Track::findOverlap`'s len1/len3 split), so a
+/// wire beyond a SHORT blocker still couples — over what is left of the run, at its own
+/// wider gap. The rank rule this replaced dropped that pair entirely.
+#[test]
+fn a_short_neighbour_shadows_only_the_run_it_spans() {
+    let rules = RcRules::parse("met1 0.1 0.05 0.1 0.5\ncouple_cutoff 2.0\n").unwrap();
+    let nets = [
+        hnet("a", 0.0, 10.0, 0.0),  // source
+        hnet("b", 0.0, 4.0, 0.5),   // covers only x[0,4] of it
+        hnet("c", 0.0, 10.0, 1.0),  // visible over the remaining x[4,10]
+    ];
+    let cc = extract_coupling(&nets, &rules, &no_widths(), &no_widths());
+    let find = |x: &str, y: &str| {
+        cc.iter()
+            .find(|c| c.a == x && c.b == y)
+            .unwrap_or_else(|| panic!("{x}/{y} missing from {cc:?}"))
+            .cap_ff
+    };
+    // a–b: the full 4.0 of b's run, at gap 0.5 (== s_ref, factor 1.0)
+    assert!((find("a", "b") - 0.4).abs() < 1e-9, "a/b = {}", find("a", "b"));
+    // a–c: the 6.0 b does not span, at gap 1.0 -> 0.1 * 6 * (0.5/1.0)
+    assert!((find("a", "c") - 0.3).abs() < 1e-9, "a/c = {}", find("a", "c"));
+    // b–c: b's own view upward, its whole 4.0 run at gap 0.5
+    assert!((find("b", "c") - 0.4).abs() < 1e-9, "b/c = {}", find("b", "c"));
+}
+
+/// The other half of the same rule: a neighbour that spans the WHOLE parallel run leaves
+/// nothing uncovered, so the wire behind it is not coupled to at all.
+#[test]
+fn a_covering_neighbour_hides_what_is_behind_it() {
+    let rules = RcRules::parse("met1 0.1 0.05 0.1 0.5\ncouple_cutoff 2.0\n").unwrap();
+    let nets = [
+        hnet("a", 0.0, 10.0, 0.0),
+        hnet("b", -1.0, 11.0, 0.5), // spans past both ends of a
+        hnet("c", 0.0, 10.0, 1.0),
+    ];
+    let cc = extract_coupling(&nets, &rules, &no_widths(), &no_widths());
+    assert!(
+        !cc.iter().any(|c| c.a == "a" && c.b == "c"),
+        "a couples through a wire that fully covers it: {cc:?}"
+    );
+    assert!(cc.iter().any(|c| c.a == "a" && c.b == "b"));
+    assert!(cc.iter().any(|c| c.b == "c" && c.a == "b"));
+}
+
+/// A power rail is metal that blocks and never couples. The reference ends its outward
+/// walk on `isPower()` and books rail-adjacent field as GROUND, which is why its SPEF
+/// carries no power nets at all — so a rail must remove the pair behind it and add none
+/// of its own. On sky130 rows this is not a corner case: a met1 rail runs through every
+/// standard-cell row.
+#[test]
+fn power_metal_blocks_and_is_never_reported() {
+    let rules = RcRules::parse("met1 0.1 0.05 0.1 0.5\ncouple_cutoff 2.0\n").unwrap();
+    let nets = [hnet("a", 0.0, 10.0, 0.0), hnet("c", 0.0, 10.0, 1.0)];
+    let rail = vec![Segment {
+        layer: "met1".into(),
+        x0: 0.0,
+        y0: 0.5,
+        x1: 10.0,
+        y1: 0.5,
+        width_um: 0.2,
+    }];
+
+    // Without the grid the two signals couple straight through where the rail sits.
+    let open = extract_coupling(&nets, &rules, &no_widths(), &no_widths());
+    assert_eq!(open.len(), 1, "{open:?}");
+
+    let blocked = extract_coupling_blocked(&nets, &rules, &no_widths(), &no_widths(), &rail);
+    assert!(blocked.is_empty(), "coupled through a power rail: {blocked:?}");
+}
+
+/// A same-net wire is metal in the way. It blocks like any other wire, but a net does not
+/// couple to itself, so the blocked pair simply disappears.
+#[test]
+fn same_net_metal_blocks_without_being_reported() {
+    let rules = RcRules::parse("met1 0.1 0.05 0.1 0.5\ncouple_cutoff 2.0\n").unwrap();
+    let mut a = hnet("a", 0.0, 10.0, 0.0);
+    a.segments.push(Segment::wire("met1", 0.0, 0.5, 10.0, 0.5)); // a's own second wire
+    let cc = extract_coupling(&[a, hnet("c", 0.0, 10.0, 1.0)], &rules, &no_widths(), &no_widths());
+    // Only the a-wire at y=0.5 sees c; the one at y=0 is behind it.
+    assert_eq!(cc.len(), 1, "{cc:?}");
+    assert!((cc[0].cap_ff - 1.0).abs() < 1e-9, "cc={}", cc[0].cap_ff);
 }
 
 #[test]

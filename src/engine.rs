@@ -52,6 +52,35 @@ impl std::fmt::Display for ExtractError {
 }
 impl std::error::Error for ExtractError {}
 
+/// The power grid as occluding metal, in microns.
+///
+/// `SPECIALNETS` geometry is parsed in DB units with an explicit strap width; the
+/// coupling pass wants microns and a per-segment width, since a PDN strap is nothing
+/// like a default-width signal wire. Returns empty when the DEF carries no PDN (or no
+/// `UNITS DISTANCE MICRONS`), which leaves the coupling pass exactly as it was.
+fn power_blockers(d: &Def) -> Vec<def::Segment> {
+    let dbu = if d.units_per_um > 0.0 {
+        d.units_per_um
+    } else {
+        d.dbu
+    };
+    if dbu <= 0.0 {
+        return Vec::new();
+    }
+    d.power_nets
+        .iter()
+        .flat_map(|n| n.segs.iter())
+        .map(|s| def::Segment {
+            layer: s.layer.clone(),
+            x0: s.x1 as f64 / dbu,
+            y0: s.y1 as f64 / dbu,
+            x1: s.x2 as f64 / dbu,
+            y1: s.y2 as f64 / dbu,
+            width_um: s.width_dbu / dbu,
+        })
+        .collect()
+}
+
 /// Load the job's DEF + rules; extract per-net parasitics and coupling caps.
 pub fn extract(job: &ExtractJob) -> Result<Extraction, ExtractError> {
     // Optional per-phase wall-clock breakdown (set VYGES_TIMING=1) — isolates the parallel
@@ -137,7 +166,13 @@ pub fn extract(job: &ExtractJob) -> Result<Extraction, ExtractError> {
     }
     let trees: Vec<Option<RcNetwork>> = outcomes.into_iter().map(|o| o.built()).collect();
     lap!("per-net trees");
-    let couplings = coupling::extract_coupling(&d.nets, &r, &lef.widths, &lef.thicknesses);
+    // The power grid never appears in the coupling output — an AC ground takes field as
+    // grounded capacitance — but it is metal, and metal blocks line of sight. On sky130
+    // standard-cell rows a met1 rail runs through every row, so two signals on either
+    // side of one must not couple through it.
+    let blockers = power_blockers(&d);
+    let couplings =
+        coupling::extract_coupling_blocked(&d.nets, &r, &lef.widths, &lef.thicknesses, &blockers);
     lap!("coupling");
     // Conditional ground-cap shielding: a net's coupling is field that would otherwise
     // be grounded fringe, so reduce its grounded cap by `shield_k · Cc_net` (charge

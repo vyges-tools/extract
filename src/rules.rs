@@ -46,7 +46,9 @@ pub struct RcRules {
     /// as 1/s. Measured from sky130A's `rules.openrcx` deck, met1 retains **0.773** of its
     /// minimum-spacing coupling at twice the spacing where 1/s would give 0.500. A 1/s model
     /// fitted for total therefore runs ~20 % low per pair and has to inflate its coefficient to
-    /// compensate. See `docs/extract/coupling-mechanism-open.md`.
+    /// compensate. With the characterised curve in place the fitted coefficients land within
+    /// 0.88–1.04× of the reference's own per-layer values — see
+    /// [`correlation/ground-vs-coupling.md`](../correlation/ground-vs-coupling.md).
     pub couple_shapes: BTreeMap<String, Vec<(f64, f64)>>,
     /// Conditional ground-cap shielding fraction (`shield_k <0..1>`). A net's
     /// coupling `Cc` is field that would otherwise terminate on ground as fringe, so
