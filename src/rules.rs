@@ -38,6 +38,16 @@ pub struct RcRules {
     /// and a metal thickness is known, coupling is `eps_r·eps0·T/gap` (the geometry-
     /// derived M5 model) instead of the per-layer `coupling` coefficient.
     pub eps_r: f64,
+    /// Per-layer coupling **shape**: `(spacing µm, factor)` ascending, normalised to 1.0 at the
+    /// first point. Multiplies `coupling_per_um`, so the deck's fitted scale is unchanged and
+    /// only the fall-off comes from characterisation.
+    ///
+    /// Why a table rather than a formula: the reference extractor's coupling does not fall off
+    /// as 1/s. Measured from sky130A's `rules.openrcx` deck, met1 retains **0.773** of its
+    /// minimum-spacing coupling at twice the spacing where 1/s would give 0.500. A 1/s model
+    /// fitted for total therefore runs ~20 % low per pair and has to inflate its coefficient to
+    /// compensate. See `docs/extract/coupling-mechanism-open.md`.
+    pub couple_shapes: BTreeMap<String, Vec<(f64, f64)>>,
     /// Conditional ground-cap shielding fraction (`shield_k <0..1>`). A net's
     /// coupling `Cc` is field that would otherwise terminate on ground as fringe, so
     /// the grounded cap is reduced by `shield_k · Cc_net` (charge conservation),
@@ -138,6 +148,7 @@ impl RcRules {
             heights: BTreeMap::new(),
             interlayer: BTreeMap::new(),
             rsheet,
+            couple_shapes: BTreeMap::new(),
         }
     }
 
@@ -224,6 +235,7 @@ impl RcRules {
             heights: BTreeMap::new(),
             interlayer: BTreeMap::new(),
             rsheet: BTreeMap::new(),
+            couple_shapes: BTreeMap::new(),
         }
     }
 
@@ -257,6 +269,7 @@ impl RcRules {
         let mut heights = BTreeMap::new();
         let mut interlayer = BTreeMap::new();
         let mut rsheet = BTreeMap::new();
+        let mut couple_shapes: BTreeMap<String, Vec<(f64, f64)>> = BTreeMap::new();
         for raw in text.lines() {
             let toks: Vec<&str> = strip_comment(raw).split_whitespace().collect();
             if toks.is_empty() {
@@ -285,6 +298,29 @@ impl RcRules {
             }
             if toks[0].eq_ignore_ascii_case("shield_k") {
                 shield_k = num(toks.get(1).copied().unwrap_or(""), "shield_k")?;
+                continue;
+            }
+            if toks[0].eq_ignore_ascii_case("couple_shape") {
+                let layer = toks.get(1).copied().unwrap_or("");
+                if layer.is_empty() || toks.len() < 3 {
+                    return Err(RulesError(
+                        "couple_shape needs `layer <spacing>:<factor> ...`".into(),
+                    ));
+                }
+                let mut pts: Vec<(f64, f64)> = Vec::new();
+                for t in &toks[2..] {
+                    let (sp, fa) = t.split_once(':').ok_or_else(|| {
+                        RulesError(format!("couple_shape {layer}: expected `spacing:factor`, got {t:?}"))
+                    })?;
+                    pts.push((
+                        num(sp, &format!("{layer} couple_shape spacing"))?,
+                        num(fa, &format!("{layer} couple_shape factor"))?,
+                    ));
+                }
+                // Ascending spacing is what the interpolator assumes; sorting here means a
+                // hand-edited deck cannot silently produce a non-monotonic curve.
+                pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                couple_shapes.insert(layer.to_string(), pts);
                 continue;
             }
             if toks[0].eq_ignore_ascii_case("rsheet") {
@@ -351,6 +387,7 @@ impl RcRules {
             heights,
             interlayer,
             rsheet,
+            couple_shapes,
         })
     }
 

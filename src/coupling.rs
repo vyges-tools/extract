@@ -104,8 +104,8 @@ fn pair_cap(
             let h = rules.heights.get(&sa.layer).copied().unwrap_or(0.0);
             crate::field::coupling_per_um_fringe(rules.eps_r, t, h, gap) * ov
         } else if l.coupling_per_um > 0.0 {
-            // rule-based coefficient (falls back when no eps_r / thickness)
-            l.coupling_per_um * ov * (l.s_ref / gap.max(l.s_ref))
+            // rule-based coefficient, scaled by the layer's fall-off shape.
+            l.coupling_per_um * ov * couple_shape(rules, &sa.layer, l, gap)
         } else {
             0.0
         }
@@ -120,6 +120,41 @@ fn pair_cap(
     } else {
         0.0
     }
+}
+
+/// The fall-off factor for a layer at edge-to-edge spacing `gap`.
+///
+/// Prefers the layer's **characterised curve** (`couple_shape` in the deck) and falls back to the
+/// analytic `s_ref / max(gap, s_ref)` when none is given.
+///
+/// The distinction matters more than it looks. Real coupling does not fall off as 1/s: measured
+/// from sky130A's reference deck, met1 keeps **0.773** of its minimum-spacing coupling at twice
+/// the spacing, where 1/s would give 0.500. A 1/s model fitted to reproduce *totals* therefore
+/// runs systematically low per pair — the measured ~20 % — and has to inflate its coefficient to
+/// compensate, which is what made that coefficient look unphysical.
+///
+/// Interpolation follows the reference's own `getComputeRC`: clamp below the first sample, linear
+/// between samples, and a 1/gap tail past the last one — the tail being the only place a `1/s`
+/// fall-off is actually right.
+fn couple_shape(rules: &RcRules, layer: &str, l: &crate::rules::LayerRc, gap: f64) -> f64 {
+    let Some(pts) = rules.couple_shapes.get(layer).filter(|p| !p.is_empty()) else {
+        // No characterised curve: the original analytic shape.
+        return l.s_ref / gap.max(l.s_ref);
+    };
+    let (s0, f0) = pts[0];
+    if gap <= s0 {
+        return f0; // clamp — the curve is not characterised below its first sample
+    }
+    for w in pts.windows(2) {
+        let ((x0, y0), (x1, y1)) = (w[0], w[1]);
+        if gap >= x0 && gap < x1 {
+            let span = x1 - x0;
+            return if span <= 0.0 { y0 } else { y0 + (y1 - y0) * (gap - x0) / span };
+        }
+    }
+    // Past the table: 1/gap from the last characterised point.
+    let (sn, fnl) = pts[pts.len() - 1];
+    fnl * sn / gap
 }
 
 /// Coupling caps between every pair of nets — one aggregated entry per net pair.
@@ -312,3 +347,97 @@ pub fn extract_coupling_capped(
 /// Lower bound on grid cell size (um) — stops a near-zero cutoff from producing an
 /// enormous number of tiny cells.
 const MIN_CELL_UM: f64 = 1.0;
+
+#[cfg(test)]
+mod shape_tests {
+    use super::*;
+    use crate::rules::LayerRc;
+
+    fn rules_with(shape: Option<Vec<(f64, f64)>>) -> RcRules {
+        let mut r = RcRules::parse("met1 0.125 0.078 0.1 0.14\ncouple_cutoff 5.0\n").unwrap();
+        if let Some(pts) = shape {
+            r.couple_shapes.insert("met1".into(), pts);
+        }
+        r
+    }
+    fn met1(r: &RcRules) -> LayerRc {
+        *r.layers.get("met1").unwrap()
+    }
+
+    /// With no characterised curve the model keeps its original analytic fall-off, so a deck
+    /// written before `couple_shape` existed behaves exactly as it did.
+    #[test]
+    fn falls_back_to_the_analytic_shape() {
+        let r = rules_with(None);
+        let l = met1(&r);
+        assert!((couple_shape(&r, "met1", &l, 0.14) - 1.0).abs() < 1e-12, "at s_ref");
+        assert!((couple_shape(&r, "met1", &l, 0.28) - 0.5).abs() < 1e-12, "1/s at twice s_ref");
+        assert!((couple_shape(&r, "met1", &l, 0.05) - 1.0).abs() < 1e-12, "clamped below s_ref");
+    }
+
+    /// The characterised curve is used where present — and it is nothing like 1/s. sky130A's
+    /// met1 keeps 0.773 at twice the minimum spacing where the analytic model gives 0.500;
+    /// that gap is the ~20 % per-pair deficit this replaced.
+    #[test]
+    fn the_characterised_curve_decays_far_slower_than_one_over_s() {
+        let r = rules_with(Some(vec![(0.14, 1.0), (0.28, 0.7734), (0.42, 0.6001)]));
+        let l = met1(&r);
+        assert!((couple_shape(&r, "met1", &l, 0.28) - 0.7734).abs() < 1e-9);
+        let analytic = l.s_ref / 0.28_f64.max(l.s_ref);
+        assert!(analytic < 0.51, "the analytic model gives {}", analytic);
+    }
+
+    /// Between samples the curve is linear, matching the reference's own `getComputeRC`.
+    #[test]
+    fn interpolates_linearly_between_samples() {
+        let r = rules_with(Some(vec![(0.14, 1.0), (0.28, 0.8), (0.42, 0.6)]));
+        let l = met1(&r);
+        assert!((couple_shape(&r, "met1", &l, 0.21) - 0.9).abs() < 1e-9, "midpoint of 1.0..0.8");
+        assert!((couple_shape(&r, "met1", &l, 0.35) - 0.7).abs() < 1e-9, "midpoint of 0.8..0.6");
+    }
+
+    /// Below the first sample the curve is clamped: it is not characterised there, and
+    /// extrapolating a steepening curve toward zero spacing invents coupling.
+    #[test]
+    fn clamps_below_the_first_sample() {
+        let r = rules_with(Some(vec![(0.14, 1.0), (0.28, 0.7734)]));
+        let l = met1(&r);
+        assert!((couple_shape(&r, "met1", &l, 0.10) - 1.0).abs() < 1e-12);
+        assert!((couple_shape(&r, "met1", &l, 0.0) - 1.0).abs() < 1e-12);
+    }
+
+    /// Past the last sample it falls as 1/gap from that point — the one regime where a 1/s
+    /// fall-off is the right shape, and what the reference does there too.
+    #[test]
+    fn tails_off_as_one_over_gap_past_the_table() {
+        let r = rules_with(Some(vec![(0.14, 1.0), (1.4, 0.25)]));
+        let l = met1(&r);
+        assert!((couple_shape(&r, "met1", &l, 2.8) - 0.25 * 1.4 / 2.8).abs() < 1e-9);
+        assert!(couple_shape(&r, "met1", &l, 100.0) < 0.005, "decays away");
+    }
+
+    /// A deck round-trips the curve, so a fitted deck can be written back out.
+    #[test]
+    fn the_deck_parses_a_shape_line() {
+        let r = RcRules::parse(
+            "met1 0.125 0.078 0.1 0.14\ncouple_shape met1 0.14:1.0 0.28:0.7734 0.42:0.6001\n",
+        )
+        .unwrap();
+        let pts = r.couple_shapes.get("met1").expect("parsed");
+        assert_eq!(pts.len(), 3);
+        assert!((pts[1].1 - 0.7734).abs() < 1e-12);
+    }
+
+    /// Points given out of order are sorted, so a hand-edited deck cannot silently produce a
+    /// non-monotonic curve that the interpolator would read as a step.
+    #[test]
+    fn shape_points_are_sorted_by_spacing() {
+        let r = RcRules::parse(
+            "met1 0.125 0.078 0.1 0.14\ncouple_shape met1 0.42:0.6 0.14:1.0 0.28:0.77\n",
+        )
+        .unwrap();
+        let pts = r.couple_shapes.get("met1").unwrap();
+        assert_eq!(pts[0].0, 0.14);
+        assert_eq!(pts[2].0, 0.42);
+    }
+}
