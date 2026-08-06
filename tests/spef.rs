@@ -44,6 +44,17 @@ fn header_and_units() {
     );
 }
 
+/// A `*D_NET` total, as a NUMBER. The writer emits significant figures and trims trailing
+/// zeros, so `0.45` and `0.450000` are the same total and only one of them is a property of the
+/// design. Asserting the text made every such test a hostage to the number format.
+fn d_net(text: &str, id: &str) -> f64 {
+    text.lines()
+        .find(|l| l.starts_with(&format!("*D_NET {id} ")))
+        .and_then(|l| l.split_whitespace().nth(2))
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or_else(|| panic!("no *D_NET {id}\n{text}"))
+}
+
 #[test]
 fn name_map_and_dnet() {
     let s = render("counter", &Units::default(), None, &[net()], &[]);
@@ -51,14 +62,14 @@ fn name_map_and_dnet() {
     assert!(s.contains("*1 clk"));
     assert!(s.contains("*2 clkbuf"));
     assert!(s.contains("*3 ff0"));
-    assert!(s.contains("*D_NET *1 0.450000")); // no coupling -> total == ground
+    assert!((d_net(&s, "*1") - 0.45).abs() < 1e-9); // no coupling -> total == ground
     assert!(s.contains("*I *2:X I"));
     // per-pin RC tree (driver clkbuf + 1 sink ff0): C split to pin nodes,
     // trunk + branch each R/2 from the net-node root
-    assert!(s.contains("*CAP\n1 *2:X 0.225000")); // near half at the driver
-    assert!(s.contains("2 *3:CLK 0.225000")); // far half at the sink
-    assert!(s.contains("*RES\n1 *1 *2:X 5.025000")); // trunk net->driver
-    assert!(s.contains("2 *1 *3:CLK 5.025000")); // branch net->sink
+    assert!(s.contains("*CAP\n1 *2:X 0.225")); // near half at the driver
+    assert!(s.contains("2 *3:CLK 0.225")); // far half at the sink
+    assert!(s.contains("*RES\n1 *1:0 *2:X 5.025")); // trunk net->driver
+    assert!(s.contains("2 *1:0 *3:CLK 5.025")); // branch net->sink
     assert!(s.trim_end().ends_with("*END"));
 }
 
@@ -77,10 +88,12 @@ fn coupling_adds_to_totals_and_caps() {
     }];
     let s = render("c", &Units::default(), None, &[net(), n0], &cpl);
     // totals include the coupling on BOTH nets (clk id=1, n0 id=2)
-    assert!(s.contains("*D_NET *1 0.480000"), "clk total"); // 0.45 + 0.03
-    assert!(s.contains("*D_NET *2 0.230000"), "n0 total"); // 0.20 + 0.03
-                                                           // coupling listed once, under net A (clk), as a two-node cap entry
-    assert!(s.contains(" *1 *2 0.030000"), "coupling cap entry\n{s}");
+    assert!((d_net(&s, "*1") - 0.48).abs() < 1e-9, "clk total"); // 0.45 + 0.03
+    assert!((d_net(&s, "*2") - 0.23).abs() < 1e-9, "n0 total"); // 0.20 + 0.03
+    // Listed under BOTH nets: a reader applies a coupling capacitor to the net whose block it
+    // is in, so one listing leaves the other net believing it is coupled to nothing.
+    assert!(s.contains(" *1:0 *2:0 0.03"), "coupling under clk\n{s}");
+    assert!(s.contains(" *2:0 *1:0 0.03"), "coupling under n0\n{s}");
 }
 
 #[test]
@@ -260,9 +273,20 @@ fn hierarchical_names_are_escaped_and_reversible() {
     let mut n = net();
     n.name = "u_adapter/q[0]".into();
     let text = render("blk", &Units::default(), None, &[n], &[]);
+    // WRITTEN AS THE DESIGN NAMES IT, not re-escaped. Both forms are legal SPEF and they mean
+    // different things: OpenSTA's grammar reads `q[0]` as a BIT_IDENT (bit 0 of bus `q`) and
+    // `q\[0\]` as an ID whose characters include the brackets. Which one is right depends on
+    // whether the netlist declares a bus or an escaped identifier — the characters alone cannot
+    // say, and the DEF we read already spelled it correctly.
+    //
+    // When in doubt the unescaped form is the safe one: `SdcNetwork::findNetRelative` tries the
+    // name, then `escapeDividers`, then `escapeBrackets`, then both — it only ever ADDS escapes,
+    // so under-escaping is recovered and over-escaping is a hard miss. Three OpenSTA issues
+    // (#132, #208, #311) are all in that direction. Measured: a re-escaped `count\[0\]` gives
+    // `net count\[0\] not found` for every bussed net in a hardened design.
     assert!(
-        text.contains("u_adapter\\/q\\[0\\]"),
-        "the name map must escape reserved characters:\n{text}"
+        text.contains("*1 u_adapter/q[0]"),
+        "the name is written as the design spells it:\n{text}"
     );
     // and escaping must be exactly reversible — an escape a reader cannot undo is no better
     // than none at all. (The map also carries instance names; only the net is asserted here.)
@@ -314,7 +338,8 @@ fn coupling_between_hierarchical_names_is_escaped() {
             }
         }
     }
-    assert_eq!(cc_lines, 1, "one two-node *CAP entry:\n{text}");
+    // Once per net, so twice in the file — see `coupling_adds_to_totals_and_caps`.
+    assert_eq!(cc_lines, 2, "a two-node *CAP entry under each net:\n{text}");
 }
 
 /// A name with no reserved characters must pass through untouched — escaping is not allowed to

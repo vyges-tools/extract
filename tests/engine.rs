@@ -128,16 +128,29 @@ fn example_counter_extracts_to_spef() {
 
     // Totals are unchanged by the distributed model — it redistributes the same
     // calibrated per-net R/C over the real routing, it does not re-extract them.
-    // clk total = ground 0.45 + coupling 0.006512 = 0.456512.
-    assert!(spef.contains("*D_NET *1 0.456512"), "clk total\n{spef}");
-    // n0 total = ground 0.0804 + coupling 0.006512 = 0.086912.
-    assert!(spef.contains("*D_NET *2 0.086912"), "n0 total\n{spef}");
-    // coupling listed once as a two-node entry with the same value as before.
-    assert!(
+    //
+    // Compared as NUMBERS. The writer emits the shortest decimal that reads back as the same
+    // value, not a fixed six places — six places is not six significant figures, and it wrote
+    // every capacitance below 5e-7 fF as `0.000000`, deleting the capacitor. So the text of a
+    // total is `0.4565116279069767`, and what this test is about is the value.
+    let d_net = |id: &str| -> f64 {
         spef.lines()
-            .any(|l| l.contains("0.006512") && l.matches('*').count() == 2),
-        "coupling clk-n0 two-node entry\n{spef}"
-    );
+            .find(|l| l.starts_with(&format!("*D_NET {id} ")))
+            .and_then(|l| l.split_whitespace().nth(2))
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or_else(|| panic!("no *D_NET {id}\n{spef}"))
+    };
+    // clk total = ground 0.45 + coupling 0.006512
+    assert!((d_net("*1") - 0.456512).abs() < 1e-6, "clk total {}", d_net("*1"));
+    // n0 total = ground 0.0804 + coupling 0.006512
+    assert!((d_net("*2") - 0.086912).abs() < 1e-6, "n0 total {}", d_net("*2"));
+    // The coupling is listed under BOTH nets — a reader applies it to the net whose block it is
+    // in, so one listing leaves the other net believing it is coupled to nothing.
+    let cc: Vec<&str> = spef
+        .lines()
+        .filter(|l| l.contains("0.0065") && l.matches('*').count() == 2)
+        .collect();
+    assert_eq!(cc.len(), 2, "coupling clk-n0 listed under both nets\n{spef}");
 
     // clk is emitted as a DISTRIBUTED tree: it has an internal wire-junction node
     // and its node caps / edge resistances reconcile to the lumped totals (0.45 fF
@@ -155,8 +168,14 @@ fn example_counter_extracts_to_spef() {
         (res - 10.05).abs() < 1e-6,
         "clk resistances sum to 10.05, got {res}"
     );
+    // The M1M2 via resistor. By VALUE — the writer trims trailing zeros, so `9.3` and
+    // `9.300000` are the same number and only one of them is a property of this design.
     assert!(
-        spef.contains("9.300000"),
+        spef.lines().any(|l| l
+            .split_whitespace()
+            .last()
+            .and_then(|v| v.parse::<f64>().ok())
+            .is_some_and(|v| (v - 9.3).abs() < 1e-6)),
         "the M1M2 via resistor is present\n{spef}"
     );
 

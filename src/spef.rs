@@ -38,22 +38,6 @@ impl Default for Units {
     }
 }
 
-/// Escape a design name for SPEF: the grammar reserves `/` (hierarchy divider), `[` `]` (bus
-/// delimiters), `:` (node separator), `.`, `*` and `\` itself. A name carrying any of them must
-/// be written escaped or it is not the same name to the reader — and the mismatch is silent,
-/// because a reader that splits `u/q[0]` simply finds a net nobody asked about.
-///
-/// Kept in step with the reader in `vyges-loom`'s `spef.rs`, which unescapes on the way in.
-fn escape_name(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    for c in name.chars() {
-        if matches!(c, '\\' | '[' | ']' | '.' | '/' | ':' | '*' | '!' | '{' | '}') {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
-}
 
 /// Assigns stable integer ids to names in first-seen order (deterministic).
 struct NameMap {
@@ -82,8 +66,34 @@ impl NameMap {
     }
 }
 
+/// A SPEF number: **eight significant figures**, plain decimal.
+///
+/// Significant FIGURES, not decimal places. `{:.6}` is six places, so every capacitance below
+/// 5e-7 fF was written `0.000000` — the capacitor deleted, in a file that still parses, and
+/// coupling capacitors are exactly where that lands. Significant figures cannot round a value
+/// away whatever its magnitude, and trailing zeros are trimmed, so the file stays about as
+/// compact as OpenRCX's own output (which carries six). Eight rather than six so that a net
+/// total still reconciles with the sum of its parts to better than a part in ten million.
+///
+/// The exponent fallback is for a value no extraction produces (below ~1e-17), where the plain
+/// decimal would be all zeros; SPEF readers take exponent notation, and nothing physical
+/// reaches it.
 fn val(v: f64) -> String {
-    format!("{v:.6}")
+    if v == 0.0 || !v.is_finite() {
+        return "0".into();
+    }
+    let mag = v.abs().log10().floor() as i32;
+    let places = (7 - mag).clamp(0, 17) as usize;
+    let s = format!("{v:.places$}");
+    let s = if s.contains('.') {
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        s
+    };
+    if s.is_empty() || s == "0" || s == "-0" {
+        return format!("{v:e}");
+    }
+    s
 }
 
 /// `(node label, grounded cap)` lines for a net's `*CAP` section.
@@ -227,6 +237,13 @@ pub fn render_distributed(
     // tree exists, else the net-id root of the star. Lets a coupling entry name a
     // real node on both sides regardless of each net's topology.
     let rep_label = |n: usize| -> String {
+        // A net that reaches a top-level port presents the PORT as its node — spelled the way
+        // `*P` spells it, and the way the reference extractor writes it (`1 clk 0.00195946`).
+        // A bare name in a node position IS a port reference, which is what makes this correct
+        // here and wrong for an internal net.
+        if let Some((_, pin)) = nets[n].pins.iter().find(|(i, _)| is_port(i)) {
+            return pin.clone();
+        }
         match trees.get(n).and_then(|t| t.as_ref()) {
             // A coupling entry that names an instance which does not exist is how OpenRCX ends
             // up dereferencing a null and **segfaulting**, so this is not cosmetic; found by
@@ -236,7 +253,10 @@ pub fn render_distributed(
                 node_label(*iid, pin)
             }
             Some(_) => format!("*{}:0", net_ids[n]), // pinless tree -> first internal node
-            None => format!("*{}", net_ids[n]),      // star root
+            // THE NET'S OWN NODE STILL NEEDS A NODE NUMBER. `*<id>` alone is a PORT reference in
+            // SPEF, so a star-rooted net named that way asks a reader for a port that does not
+            // exist: OpenSTA reports `pin net33 not found` and drops the coupling capacitor.
+            None => format!("*{}:0", net_ids[n]),
         }
     };
     let id_of: BTreeMap<&str, usize> = nets
@@ -249,10 +269,16 @@ pub fn render_distributed(
     // under each net (keyed by net A).
     let mut coupling_total: BTreeMap<String, f64> = BTreeMap::new();
     let mut under: BTreeMap<String, Vec<&CouplingCap>> = BTreeMap::new();
+    // LISTED UNDER BOTH NETS, which is what OpenRCX does and is not redundancy: a reader
+    // applies a coupling capacitor to the net whose block it appears in, so a cap written under
+    // A only leaves B believing it is coupled to nothing. Measured on a hardened counter, the
+    // one-sided form put the design 3 ps fast; a reader that dedupes (ours does, by node pair)
+    // is unaffected by the second listing.
     for c in couplings {
         *coupling_total.entry(c.a.clone()).or_default() += c.cap_ff;
         *coupling_total.entry(c.b.clone()).or_default() += c.cap_ff;
         under.entry(c.a.clone()).or_default().push(c);
+        under.entry(c.b.clone()).or_default().push(c);
     }
 
     let mut s = String::new();
@@ -288,13 +314,23 @@ pub fn render_distributed(
 
     s.push_str("*NAME_MAP\n");
     for (i, name) in nm.order.iter().enumerate() {
-        // ESCAPED. A hierarchical or bussed net name carries characters the SPEF grammar gives
-        // its own meaning — `/` divides hierarchy, `[` `]` delimit a bus index, `:` separates a
-        // node from its net. Emitted raw, `u_adapter/q[0]` is not the name we meant: a reader
-        // splits it, and the net it belongs to is silently absent from any name-keyed
-        // comparison. Measured against the reference, that was ~5 % of nets — and they are the
-        // hierarchical ones, which is not a random sample.
-        s.push_str(&format!("*{} {}\n", i + 1, escape_name(name)));
+        // WRITTEN AS THE DEF SPELLED IT. Escaping is not a property of the characters: SPEF's
+        // grammar reads `count[0]` as a BIT_IDENT (bit 0 of bus `count`) and `CFG_REG\[0\]` as
+        // an ID whose characters include the brackets, and which one is right depends on whether
+        // the netlist declares a bus or an escaped identifier. The DEF already carries that
+        // distinction — `- count[0]` against `- CFG_REG\[0\]` — so the correct name is the one
+        // we read, unaltered.
+        //
+        // Re-escaping it was measured wrong in both directions: on a design with real buses it
+        // produced `count\[0\]` and OpenSTA reported `net count\[0\] not found` for every
+        // bussed net; on a design whose DEF names were already escaped it doubled the backslash
+        // and the file was a syntax error at the name map.
+        //
+        // Under-escaping, if it ever happens, is the recoverable direction:
+        // `SdcNetwork::findNetRelative` tries the name, then `escapeDividers`, then
+        // `escapeBrackets`, then both — it only ever ADDS escapes. OpenSTA issues #132, #208
+        // and #311 are all tools under-escaping and the reader being relaxed to cope.
+        s.push_str(&format!("*{} {}\n", i + 1, name));
     }
     s.push('\n');
 
@@ -396,13 +432,16 @@ pub fn render_distributed(
             let rep_a = rep_label(n);
             for c in list {
                 ci += 1;
+                // Oriented from THIS net: the entry sits in this net's block, so the far end is
+                // whichever of the pair is not this net.
+                let other = if c.a == net.name { &c.b } else { &c.a };
                 let rep_b = id_of
-                    .get(c.b.as_str())
+                    .get(other.as_str())
                     .map(|&j| rep_label(j))
                     .unwrap_or_else(|| {
-                        nm.id(&c.b)
-                            .map(|b| format!("*{b}"))
-                            .unwrap_or_else(|| format!("*{nid}"))
+                        nm.id(other)
+                            .map(|b| format!("*{b}:0"))
+                            .unwrap_or_else(|| format!("*{nid}:0"))
                     });
                 s.push_str(&format!("{ci} {rep_a} {rep_b} {}\n", val(c.cap_ff)));
             }
@@ -477,32 +516,36 @@ fn emit_tree(
 /// Lumped star emission (the geometry-free fallback): driver near-half + per-sink
 /// far-half branches off the net-id root. Reduces to a pi for one sink and a lump
 /// with no series R.
+/// The root node is `*<nid>:0`, never a bare `*<nid>`: a bare index in a node position is a
+/// PORT reference in SPEF, so a star-rooted internal net written that way asks the reader for a
+/// port the design does not have. OpenSTA reports `pin net33 not found` and drops the
+/// capacitance — measured on `rv_plic_lite`, 457 of them.
 fn emit_star(nid: usize, pins: &[(usize, String)], g: f64, r: f64) -> (CapLines, ResLines) {
     let mut caps: Vec<(String, f64)> = Vec::new();
     let mut res_lines: Vec<(String, String, f64)> = Vec::new();
     let node = node_label;
 
     if r <= 0.0 {
-        caps.push((format!("*{nid}"), g)); // single lump
+        caps.push((format!("*{nid}:0"), g)); // single lump
     } else if pins.is_empty() {
-        caps.push((format!("*{nid}"), g / 2.0));
+        caps.push((format!("*{nid}:0"), g / 2.0));
         caps.push((format!("*{nid}:far"), g / 2.0));
-        res_lines.push((format!("*{nid}"), format!("*{nid}:far"), r));
+        res_lines.push((format!("*{nid}:0"), format!("*{nid}:far"), r));
     } else {
         let (diid, dpin) = &pins[0]; // driver = pin 0
         let dnode = node(*diid, dpin);
         caps.push((dnode.clone(), g / 2.0)); // near half
         let sinks = &pins[1..];
         if sinks.is_empty() {
-            caps.push((format!("*{nid}"), g / 2.0)); // far half at root
-            res_lines.push((format!("*{nid}"), dnode, r));
+            caps.push((format!("*{nid}:0"), g / 2.0)); // far half at root
+            res_lines.push((format!("*{nid}:0"), dnode, r));
         } else {
-            res_lines.push((format!("*{nid}"), dnode, r / 2.0)); // trunk
+            res_lines.push((format!("*{nid}:0"), dnode, r / 2.0)); // trunk
             let k = sinks.len() as f64;
             for (siid, spin) in sinks {
                 let sn = node(*siid, spin);
                 caps.push((sn.clone(), (g / 2.0) / k));
-                res_lines.push((format!("*{nid}"), sn, r / 2.0 / k)); // branch
+                res_lines.push((format!("*{nid}:0"), sn, r / 2.0 / k)); // branch
             }
         }
     }
