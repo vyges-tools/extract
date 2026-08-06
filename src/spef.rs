@@ -11,6 +11,41 @@
 //! a trunk R/2 + near-half C to the driver and a branch R/2K + cap share to each
 //! sink, reducing to a pi for a single sink and a lump with no R.
 //!
+//! # What a real reader requires, and why none of it is obvious
+//!
+//! Everything below was measured by writing a file and having OpenSTA or OpenROAD read it back
+//! (`tests/opensta.rs`, and `diff_spef` before it) — not derived from the standard. Each is a
+//! place where a file that our own reader accepts perfectly is unusable to anyone else, which is
+//! precisely the failure a round-trip test cannot see.
+//!
+//! **The header is not decoration.** `*DATE` and `*DESIGN_FLOW` are required by the grammar
+//! OpenSTA implements; omit either and the file is a syntax error at the first missing line.
+//! `*PORTS` must follow `*NAME_MAP`, or a reader meeting `*PORTS` first concludes there is no
+//! name map at all (`RCX-0296`).
+//!
+//! **A node reference is not a net reference.** `*<id>` alone denotes a top-level PORT. A net's
+//! own node is `*<id>:0`. A star-rooted internal net written the bare way asks for a port the
+//! design does not have — on `rv_plic_lite` that was 457 × `pin net33 not found`, and the
+//! capacitance went with them.
+//!
+//! **A top-level port is `*P <port> <dir>`, and its name is NOT interned.** DEF spells a port
+//! connection with the pseudo-instance `PIN`; emit that as an `*I` and a reader hunts for an
+//! instance called `PIN`. OpenRCX reports `Spef instance PIN not found in db`, and on its
+//! in-process path the same unresolved name is a SIGSEGV rather than an error.
+//!
+//! **Names are written exactly as the DEF spelled them.** Escaping is not a property of the
+//! characters: SPEF's grammar reads `count[0]` as bit 0 of bus `count` and `CFG_REG\[0\]` as a
+//! name whose characters include brackets, and which is right depends on whether the netlist
+//! declares a bus or an escaped identifier. The DEF already carries that distinction, so
+//! re-deriving it is wrong in both directions — it produced `count\[0\]` on a bussed design
+//! (`net count\[0\] not found`, every bussed net) and a doubled backslash on a design whose DEF
+//! names were already escaped (a syntax error at the name map).
+//!
+//! **A coupling capacitor is listed in BOTH nets' blocks.** A reader applies it to the net whose
+//! block it appears in, so one listing leaves the other net believing it is uncoupled.
+//!
+//! **Numbers carry significant figures, not decimal places** — see [`val`].
+//!
 //! Pure std — fully unit-tested offline. No timestamp is embedded unless one is
 //! passed in, so an unchanged run is bit-identical (the M2 reproducibility
 //! contract).
