@@ -245,6 +245,83 @@ pub fn extract_coupling_capped(
         }
     }
 
+    // ── line of sight ────────────────────────────────────────────────────────────────
+    // A wire couples to what it can SEE. The reference walks outward track by track and
+    // stops at the first blocker — `Enclosed`, an already-covered neighbour, or a power
+    // wire (`FindCoupleWiresOnTracks_down` in OpenRCX's extmeasure_couple.cpp). Coupling
+    // to a wire hidden behind another wire is field that never arrives.
+    //
+    // Without this we couple to everything inside `couple_cutoff` regardless of what lies
+    // between, which on a routed block produced ~20k pairs the reference does not report,
+    // concentrated exactly where there is most to hide behind. It went unnoticed while the
+    // fall-off was modelled as 1/s, because that damped the distant pairs that are wrong;
+    // with a characterised fall-off they stop being negligible.
+    //
+    // `visible[id]` holds, per segment, the nearest same-layer overlapping neighbour on
+    // each side. A pair survives if EITHER end can see the other — an asymmetry that
+    // arises when the two have different run extents.
+    // Orientation and centre-line of a segment on its perpendicular axis.
+    let horiz = |sg: &Segment| (sg.x1 - sg.x0).abs() >= (sg.y1 - sg.y0).abs();
+    let perp_centre = |sg: &Segment| if horiz(sg) { (sg.y0 + sg.y1) / 2.0 } else { (sg.x0 + sg.x1) / 2.0 };
+    let run_span = |sg: &Segment| {
+        if horiz(sg) { (sg.x0.min(sg.x1), sg.x0.max(sg.x1)) } else { (sg.y0.min(sg.y1), sg.y0.max(sg.y1)) }
+    };
+
+    let visible: Vec<Vec<usize>> = (0..segs.len())
+        .into_par_iter()
+        .map(|id| {
+            let sr = &segs[id];
+            let sg = sr.seg;
+            let (xlo, ylo, xhi, yhi) = bbox(sr);
+            let mut cand: Vec<usize> = Vec::new();
+            for xb in bin(xlo - pad)..=bin(xhi + pad) {
+                for yb in bin(ylo - pad)..=bin(yhi + pad) {
+                    if let Some(ids) = grid.get(&(xb, yb)) {
+                        cand.extend(ids.iter().copied());
+                    }
+                }
+            }
+            cand.sort_unstable();
+            cand.dedup();
+
+            let (a0, a1) = run_span(sg);
+            let wa = if sg.width_um > 0.0 { sg.width_um } else { width(&sg.layer) };
+            let ca = perp_centre(sg);
+            // Nearest on each side: (gap, id).
+            let mut best: [Option<(f64, usize)>; 2] = [None, None];
+            for o in cand {
+                if o == id {
+                    continue;
+                }
+                let og = segs[o].seg;
+                // Only same-layer, same-orientation wires occlude one another.
+                if og.layer != sg.layer || horiz(og) != horiz(sg) {
+                    continue;
+                }
+                let (b0, b1) = run_span(og);
+                if b1 <= a0 || a1 <= b0 {
+                    continue; // no parallel run to couple over
+                }
+                let wb = if og.width_um > 0.0 { og.width_um } else { width(&og.layer) };
+                let delta = perp_centre(og) - ca;
+                let gap = delta.abs() - (wa + wb) / 2.0;
+                if gap > rules.couple_cutoff {
+                    continue;
+                }
+                let side = usize::from(delta >= 0.0);
+                // A same-net wire still blocks: it is metal in the way, whether or not the
+                // pair would have been reported.
+                if best[side].map(|(g, _)| gap < g).unwrap_or(true) {
+                    best[side] = Some((gap, o));
+                }
+            }
+            best.iter()
+                .filter_map(|b| b.map(|(_, o)| o))
+                .filter(|&o| segs[o].net != sr.net)
+                .collect()
+        })
+        .collect();
+
     // Accumulate by net *index* (u32), not cloned name strings — an order of magnitude
     // less memory per distinct pair, and no String allocation on the hot path.
     //
@@ -278,6 +355,14 @@ pub fn extract_coupling_capped(
             for other in cand {
                 // each unordered pair once (other > id); never self-couple a net
                 if other <= id || segs[other].net == sr.net {
+                    continue;
+                }
+                // Same-layer coupling is line-of-sight limited; cross-layer (crossover)
+                // is an overlap term with nothing between the plates, so it is exempt.
+                if sr.seg.layer == segs[other].seg.layer
+                    && !visible[id].contains(&other)
+                    && !visible[other].contains(&id)
+                {
                     continue;
                 }
                 let cc = pair_cap(sr.seg, segs[other].seg, rules, &width, &thickness);

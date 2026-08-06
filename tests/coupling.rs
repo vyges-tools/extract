@@ -150,10 +150,14 @@ fn interlayer_needs_widths() {
 }
 
 #[test]
-fn spatial_index_matches_bruteforce_on_dense_layout() {
-    // A deterministic grid of horizontal wires on two layers at varied offsets;
-    // the indexed result must equal an exhaustive O(n^2) reference exactly
-    // (no dropped pairs, no double counting, identical caps).
+fn spatial_index_agrees_with_isolated_pairs_and_respects_line_of_sight() {
+    // A deterministic grid of horizontal wires on two layers at varied offsets.
+    //
+    // Two properties, and the second is why this test changed shape. Coupling is now
+    // line-of-sight limited — a wire couples to its nearest visible neighbour per side, not
+    // to everything inside the cutoff — so a pair extracted IN ISOLATION is no longer the
+    // same as that pair extracted IN CONTEXT. Context is the point: an isolated pair has
+    // nothing between it, so the isolated result is an upper bound, not an oracle.
     let rules = RcRules::parse("met1 0.1 0.05 0.1 0.5\nmet2 0.12 0.05 0.08 0.5\n").unwrap();
     let mut nets: Vec<DefNet> = Vec::new();
     for i in 0..60u32 {
@@ -167,35 +171,48 @@ fn spatial_index_matches_bruteforce_on_dense_layout() {
     }
     let got = extract_coupling(&nets, &rules, &no_widths(), &no_widths());
 
-    // exhaustive reference using the same public physics path: run each net PAIR
-    // through extract_coupling in isolation and collect the nonzero results.
-    let mut want: std::collections::BTreeMap<(String, String), f64> = Default::default();
+    // Upper bound: every pair, extracted with nothing between it.
+    let mut isolated: std::collections::BTreeMap<(String, String), f64> = Default::default();
     for i in 0..nets.len() {
         for j in (i + 1)..nets.len() {
-            let pair = extract_coupling(
+            for c in extract_coupling(
                 &[nets[i].clone(), nets[j].clone()],
                 &rules,
                 &no_widths(),
                 &no_widths(),
-            );
-            for c in pair {
-                want.insert((c.a, c.b), c.cap_ff);
+            ) {
+                isolated.insert((c.a, c.b), c.cap_ff);
             }
         }
     }
-    assert_eq!(got.len(), want.len(), "pair count must match brute force");
+
+    // 1. The index invents nothing and computes the same cap for what it does report.
     for c in &got {
-        let w = want
+        let w = isolated
             .get(&(c.a.clone(), c.b.clone()))
-            .expect("pair present in reference");
-        assert!(
-            (c.cap_ff - w).abs() < 1e-12,
-            "cap mismatch for {}-{}: {} vs {}",
-            c.a,
-            c.b,
-            c.cap_ff,
-            w
-        );
+            .unwrap_or_else(|| panic!("indexed pair {}/{} absent from the isolated set", c.a, c.b));
+        assert!((c.cap_ff - w).abs() < 1e-12, "cap drift on {}/{}", c.a, c.b);
+    }
+
+    // 2. Line of sight actually bites: the wires are stacked 0.62 apart per layer and the
+    //    cutoff reaches several of them, so without occlusion each would couple to every
+    //    neighbour in reach rather than the nearest on each side.
+    assert!(
+        got.len() < isolated.len(),
+        "occlusion should remove hidden pairs: {} indexed vs {} isolated",
+        got.len(),
+        isolated.len()
+    );
+
+    // 3. The invariant that removal enforces: no net couples to more than two same-layer
+    //    neighbours — one visible on each side.
+    let mut degree: std::collections::BTreeMap<String, usize> = Default::default();
+    for c in &got {
+        *degree.entry(c.a.clone()).or_default() += 1;
+        *degree.entry(c.b.clone()).or_default() += 1;
+    }
+    for (net, d) in &degree {
+        assert!(*d <= 2, "{net} couples to {d} neighbours; at most one per side is visible");
     }
 }
 
