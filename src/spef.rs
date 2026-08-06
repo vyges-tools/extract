@@ -38,6 +38,23 @@ impl Default for Units {
     }
 }
 
+/// Escape a design name for SPEF: the grammar reserves `/` (hierarchy divider), `[` `]` (bus
+/// delimiters), `:` (node separator), `.`, `*` and `\` itself. A name carrying any of them must
+/// be written escaped or it is not the same name to the reader — and the mismatch is silent,
+/// because a reader that splits `u/q[0]` simply finds a net nobody asked about.
+///
+/// Kept in step with the reader in `vyges-loom`'s `spef.rs`, which unescapes on the way in.
+fn escape_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        if matches!(c, '\\' | '[' | ']' | '.' | '/' | ':' | '*' | '!' | '{' | '}') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// Assigns stable integer ids to names in first-seen order (deterministic).
 struct NameMap {
     ids: BTreeMap<String, usize>,
@@ -271,7 +288,13 @@ pub fn render_distributed(
 
     s.push_str("*NAME_MAP\n");
     for (i, name) in nm.order.iter().enumerate() {
-        s.push_str(&format!("*{} {}\n", i + 1, name));
+        // ESCAPED. A hierarchical or bussed net name carries characters the SPEF grammar gives
+        // its own meaning — `/` divides hierarchy, `[` `]` delimit a bus index, `:` separates a
+        // node from its net. Emitted raw, `u_adapter/q[0]` is not the name we meant: a reader
+        // splits it, and the net it belongs to is silently absent from any name-keyed
+        // comparison. Measured against the reference, that was ~5 % of nets — and they are the
+        // hierarchical ones, which is not a random sample.
+        s.push_str(&format!("*{} {}\n", i + 1, escape_name(name)));
     }
     s.push('\n');
 

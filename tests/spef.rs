@@ -219,3 +219,109 @@ fn a_port_is_never_written_as_a_name_map_reference() {
     );
     assert_every_reference_resolves(&s);
 }
+
+/// Undo SPEF name escaping, so the writer's output can be checked against the name we meant
+/// rather than against a fixed string. Mirrors the reader in `vyges-loom`.
+fn unescape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut esc = false;
+    for c in s.chars() {
+        if esc {
+            out.push(c);
+            esc = false;
+        } else if c == '\\' {
+            esc = true;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Pull the name-map entries out of a rendered SPEF as the reader sees them.
+fn name_map(text: &str) -> Vec<String> {
+    text.lines()
+        .skip_while(|l| l.trim() != "*NAME_MAP")
+        .skip(1)
+        .take_while(|l| l.trim_start().starts_with('*') && l.split_whitespace().count() == 2)
+        .filter_map(|l| l.split_whitespace().nth(1).map(unescape))
+        .collect()
+}
+
+/// **Hierarchical and bussed names must be escaped on the way out.**
+///
+/// The SPEF grammar reserves `/`, `[`, `]`, `:`, `.` and `*`. A net called
+/// `u_adapter/q[0]` written raw is not that name to a reader — it splits on the divider and
+/// the bus delimiters, and the net is silently absent from anything keyed on the name. That
+/// was measured at ~5 % of nets on a real block, and they are the hierarchical ones, which is
+/// not a random sample.
+#[test]
+fn hierarchical_names_are_escaped_and_reversible() {
+    let mut n = net();
+    n.name = "u_adapter/q[0]".into();
+    let text = render("blk", &Units::default(), None, &[n], &[]);
+    assert!(
+        text.contains("u_adapter\\/q\\[0\\]"),
+        "the name map must escape reserved characters:\n{text}"
+    );
+    // and escaping must be exactly reversible — an escape a reader cannot undo is no better
+    // than none at all. (The map also carries instance names; only the net is asserted here.)
+    assert!(
+        name_map(&text).contains(&"u_adapter/q[0]".to_string()),
+        "{:?}",
+        name_map(&text)
+    );
+}
+
+/// A coupling cap between two hierarchical names goes through the same map, and this is the
+/// pairing the correlation harness keys on.
+#[test]
+fn coupling_between_hierarchical_names_is_escaped() {
+    let mut a = net();
+    a.name = "top/u_a/d[3]".into();
+    let mut b = net();
+    b.name = "top/u_b/q[3]".into();
+    b.pins = vec![("ff1".into(), "D".into())];
+    let cc = CouplingCap {
+        a: a.name.clone(),
+        b: b.name.clone(),
+        cap_ff: 1.25,
+    };
+    let text = render("blk", &Units::default(), None, &[a, b], &[cc]);
+    let names = name_map(&text);
+    assert!(names.contains(&"top/u_a/d[3]".to_string()), "{names:?}");
+    assert!(names.contains(&"top/u_b/q[3]".to_string()), "{names:?}");
+    // the coupling entry itself references both by id, so it is unaffected by the escaping —
+    // pin that it is still emitted exactly once
+    // The coupling entry references both nets by map id, so escaping cannot corrupt it —
+    // pin that it is still emitted exactly once, and only inside a *CAP section (a *RES line
+    // has the same field count, which is precisely the ambiguity this format hands a reader).
+    let mut in_cap = false;
+    let mut cc_lines = 0;
+    for l in text.lines() {
+        match l.trim() {
+            "*CAP" => in_cap = true,
+            "*RES" | "*CONN" | "*END" => in_cap = false,
+            body => {
+                let f: Vec<&str> = body.split_whitespace().collect();
+                if in_cap
+                    && f.len() == 4
+                    && f[0].chars().all(|c| c.is_ascii_digit())
+                    && f[3].parse::<f64>().is_ok()
+                {
+                    cc_lines += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(cc_lines, 1, "one two-node *CAP entry:\n{text}");
+}
+
+/// A name with no reserved characters must pass through untouched — escaping is not allowed to
+/// rewrite the common case.
+#[test]
+fn ordinary_names_are_not_escaped() {
+    let text = render("blk", &Units::default(), None, &[net()], &[]);
+    assert!(!text.contains("\\clk"), "{text}");
+    assert!(name_map(&text).contains(&"clk".to_string()), "{:?}", name_map(&text));
+}
