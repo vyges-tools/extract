@@ -56,6 +56,8 @@ def ref_pairs(path):
     owner, pending = {}, []
     for b in blocks:
         net, sec = resolve(b["id"]), None
+        # The net's own id is a node: a coupling entry may name it rather than an internal node.
+        owner[resolve(b["id"])] = net
         for f in b["lines"]:
             if f[0] in ("*CONN", "*CAP", "*RES"):
                 sec = f[0]

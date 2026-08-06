@@ -2,3 +2,7 @@
 *.spef
 dist/
 .cargo/config.toml
+
+# Python bytecode from the correlation harness
+__pycache__/
+*.pyc

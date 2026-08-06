@@ -95,7 +95,9 @@ def parse_ref(path):
     for b in blocks:
         net = resolve(b["id"])
         sec = None
-        own_labels, couples = [], []
+        # The net's own id is a node too: a coupling entry may name it directly rather than an
+        # internal node, and without this that end resolves to nothing and the cap is dropped.
+        own_labels, couples = [resolve(b["id"])], []
         for f in b["lines"]:
             if f[0] in ("*CONN", "*CAP", "*RES"):
                 sec = f[0]

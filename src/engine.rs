@@ -58,7 +58,7 @@ impl std::error::Error for ExtractError {}
 /// coupling pass wants microns and a per-segment width, since a PDN strap is nothing
 /// like a default-width signal wire. Returns empty when the DEF carries no PDN (or no
 /// `UNITS DISTANCE MICRONS`), which leaves the coupling pass exactly as it was.
-fn power_blockers(d: &Def) -> Vec<def::Segment> {
+pub(crate) fn power_blockers(d: &Def) -> Vec<def::Segment> {
     let dbu = if d.units_per_um > 0.0 {
         d.units_per_um
     } else {
@@ -290,4 +290,90 @@ fn emit_input_coverage(d: &Def, rules: &RcRules, lef: &Lef, lef_given: bool) {
             format!("{base} — {}", notes.join("; "))
         },
     );
+}
+
+#[cfg(test)]
+mod power_blocker_tests {
+    use super::*;
+    use crate::def::{NetGeom, Seg};
+
+    fn strap(layer: &str, w: f64, x1: i64, y1: i64, x2: i64, y2: i64) -> Seg {
+        Seg { layer: layer.into(), width_dbu: w, x1, y1, x2, y2 }
+    }
+
+    /// `SPECIALNETS` geometry arrives in DB units with an explicit strap width; the coupling
+    /// pass wants microns. Getting the scale wrong puts the whole power grid in the wrong
+    /// place, where it blocks nothing and nothing fails — so pin the conversion.
+    #[test]
+    fn power_geometry_converts_from_dbu_to_microns() {
+        let d = Def {
+            units_per_um: 1000.0,
+            dbu: 1000.0,
+            power_nets: vec![NetGeom {
+                name: "VGND".into(),
+                use_power: false,
+                // a met1 FOLLOWPIN rail exactly as OpenLane writes it: 480 DBU wide
+                segs: vec![strap("met1", 480.0, 5520, 48960, 54280, 48960)],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let b = power_blockers(&d);
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].layer, "met1");
+        assert!((b[0].x0 - 5.520).abs() < 1e-9, "x0 = {}", b[0].x0);
+        assert!((b[0].y0 - 48.960).abs() < 1e-9, "y0 = {}", b[0].y0);
+        assert!((b[0].x1 - 54.280).abs() < 1e-9, "x1 = {}", b[0].x1);
+        // The strap's own width, NOT the layer default — a rail is 3.4x a min-width met1 wire,
+        // and the difference is most of what it blocks.
+        assert!((b[0].width_um - 0.480).abs() < 1e-9, "width = {}", b[0].width_um);
+        assert!(b[0].is_horizontal(), "a FOLLOWPIN rail runs along the row");
+    }
+
+    /// Every strap of every power net takes part, on every layer — not just the first net.
+    #[test]
+    fn all_power_nets_and_layers_contribute() {
+        let d = Def {
+            units_per_um: 1000.0,
+            dbu: 1000.0,
+            power_nets: vec![
+                NetGeom {
+                    name: "VGND".into(),
+                    segs: vec![
+                        strap("met1", 480.0, 0, 1000, 10000, 1000),
+                        strap("met4", 1600.0, 5000, 0, 5000, 10000),
+                    ],
+                    ..Default::default()
+                },
+                NetGeom {
+                    name: "VPWR".into(),
+                    use_power: true,
+                    segs: vec![strap("met1", 480.0, 0, 3720, 10000, 3720)],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let b = power_blockers(&d);
+        assert_eq!(b.len(), 3);
+        assert!(b.iter().any(|s| s.layer == "met4" && (s.width_um - 1.6).abs() < 1e-9));
+        assert_eq!(b.iter().filter(|s| s.layer == "met1").count(), 2);
+    }
+
+    /// A DEF with no `UNITS DISTANCE MICRONS` cannot be converted, and guessing a scale would
+    /// silently misplace the grid. No units -> no blockers, i.e. exactly the old behaviour.
+    #[test]
+    fn no_units_means_no_blockers_rather_than_a_guess() {
+        let d = Def {
+            units_per_um: 0.0,
+            dbu: 0.0,
+            power_nets: vec![NetGeom {
+                name: "VGND".into(),
+                segs: vec![strap("met1", 480.0, 0, 0, 10000, 0)],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(power_blockers(&d).is_empty());
+    }
 }

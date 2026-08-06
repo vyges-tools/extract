@@ -273,6 +273,116 @@ fn a_covering_neighbour_hides_what_is_behind_it() {
     assert!(cc.iter().any(|c| c.b == "c" && c.a == "b"));
 }
 
+/// **The walk is one-sided, so prove it is unbiased.**
+///
+/// Each pair is booked once, by the segment below it looking up — the reference does the same
+/// (its downward pass runs with `handleEmptyOnly`, which suppresses coupling). That is only
+/// sound if the answer does not depend on which way is "up". Mirror the whole design and every
+/// coupling value must be bit-identical: a one-sided walk that leaked bias would report
+/// different numbers for the same geometry seen upside down.
+///
+/// This is the cheapest possible check on the riskiest line of the change, and no correlation
+/// run can substitute for it — a systematic bias would just be absorbed by the fitted
+/// coefficient, exactly as the earlier errors were.
+#[test]
+fn coupling_is_invariant_under_mirroring() {
+    let rules = RcRules::parse("met1 0.1 0.05 0.1 0.5\nmet2 0.12 0.05 0.08 0.5\ncouple_cutoff 2.0\n")
+        .unwrap();
+    // A deterministic tangle: staggered run extents so shadowing is partial, both orientations,
+    // both layers, and several nets multi-segment.
+    let mut nets: Vec<DefNet> = Vec::new();
+    for i in 0..40u32 {
+        let f = i as f64;
+        let mut n = DefNet {
+            name: format!("n{i}"),
+            pins: vec![],
+            segments: vec![],
+            vias: 0,
+            via_points: Vec::new(),
+        };
+        let layer = if i % 3 == 0 { "met2" } else { "met1" };
+        if i % 2 == 0 {
+            let y = f * 0.37;
+            let x0 = (i % 5) as f64 * 0.9;
+            n.segments.push(Segment::wire(layer, x0, y, x0 + 6.0, y));
+            if i % 4 == 0 {
+                n.segments.push(Segment::wire(layer, x0 + 6.0, y, x0 + 9.0, y));
+            }
+        } else {
+            let x = f * 0.41;
+            let y0 = (i % 7) as f64 * 0.8;
+            n.segments.push(Segment::wire(layer, x, y0, x, y0 + 7.0));
+        }
+        nets.push(n);
+    }
+    let base = extract_coupling(&nets, &rules, &no_widths(), &no_widths());
+    assert!(base.len() > 20, "the fixture must actually couple: {}", base.len());
+
+    let mirror = |sign_x: f64, sign_y: f64| -> Vec<DefNet> {
+        nets.iter()
+            .map(|n| DefNet {
+                name: n.name.clone(),
+                pins: n.pins.clone(),
+                segments: n
+                    .segments
+                    .iter()
+                    .map(|s| Segment {
+                        layer: s.layer.clone(),
+                        x0: s.x0 * sign_x,
+                        y0: s.y0 * sign_y,
+                        x1: s.x1 * sign_x,
+                        y1: s.y1 * sign_y,
+                        width_um: s.width_um,
+                    })
+                    .collect(),
+                vias: n.vias,
+                via_points: n.via_points.clone(),
+            })
+            .collect()
+    };
+    for (sx, sy, what) in [
+        (1.0, -1.0, "flipped top to bottom"),
+        (-1.0, 1.0, "flipped left to right"),
+        (-1.0, -1.0, "rotated 180"),
+    ] {
+        let got = extract_coupling(&mirror(sx, sy), &rules, &no_widths(), &no_widths());
+        assert_eq!(base.len(), got.len(), "{what}: pair count");
+        for (b, g) in base.iter().zip(&got) {
+            assert_eq!((b.a.as_str(), b.b.as_str()), (g.a.as_str(), g.b.as_str()), "{what}: pairs");
+            assert_eq!(b.cap_ff.to_bits(), g.cap_ff.to_bits(), "{what}: {}-{}", b.a, b.b);
+        }
+    }
+}
+
+/// Occlusion must never *create* coupling: whatever the visibility rule decides, a net pair's
+/// cap can only be less than or equal to what the same pair reports with nothing in between.
+/// A shadowing bug that mis-assigns run length would show up here even when the totals still fit.
+#[test]
+fn shadowing_only_ever_removes() {
+    let rules = RcRules::parse("met1 0.1 0.05 0.1 0.5\ncouple_cutoff 3.0\n").unwrap();
+    let nets: Vec<DefNet> = (0..25u32)
+        .map(|i| {
+            let x0 = (i % 4) as f64 * 1.3;
+            hnet(&format!("n{i}"), x0, x0 + 8.0, i as f64 * 0.29)
+        })
+        .collect();
+    let got = extract_coupling(&nets, &rules, &no_widths(), &no_widths());
+    for c in &got {
+        let i = nets.iter().position(|n| n.name == c.a).unwrap();
+        let j = nets.iter().position(|n| n.name == c.b).unwrap();
+        let alone = extract_coupling(&[nets[i].clone(), nets[j].clone()], &rules, &no_widths(), &no_widths());
+        let bound = alone.first().map(|x| x.cap_ff).unwrap_or(0.0);
+        assert!(
+            c.cap_ff <= bound + 1e-12,
+            "{}/{}: {} in context exceeds {} alone",
+            c.a,
+            c.b,
+            c.cap_ff,
+            bound
+        );
+    }
+}
+
 /// A power rail is metal that blocks and never couples. The reference ends its outward
 /// walk on `isPower()` and books rail-adjacent field as GROUND, which is why its SPEF
 /// carries no power nets at all — so a rail must remove the pair behind it and add none
