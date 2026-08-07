@@ -20,9 +20,30 @@ use crate::rules::RcRules;
 #[derive(Debug, Clone)]
 pub struct NetParasitics {
     pub name: String,
+    /// The name as the SOURCE spelled it, escaping intact — what the SPEF writer emits.
+    ///
+    /// [`name`](Self::name) is the canonical (unescaped) form, which is what coupling lookups and
+    /// every other internal join key on. Writing that form is what silently mis-declared escaped
+    /// identifiers: SPEF reads `CFG_REG[0]` as bit 0 of a bus `CFG_REG`, while the design's net
+    /// is a scalar literally named `CFG_REG[0]`. See [`vyges_loom::def::DefNet::raw_name`].
+    ///
+    /// Empty means "no source spelling" (a synthesised net); [`write_name`](Self::write_name)
+    /// falls back to `name`.
+    pub raw_name: String,
     pub pins: Vec<(String, String)>, // (instance, pin)
     pub res_ohm: f64,
     pub cap_ff: f64,
+}
+
+impl NetParasitics {
+    /// The name to write into the SPEF: source spelling when we have one, else canonical.
+    pub fn write_name(&self) -> &str {
+        if self.raw_name.is_empty() {
+            &self.name
+        } else {
+            &self.raw_name
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -65,6 +86,7 @@ pub fn extract_net(
     res_ohm += net.vias as f64 * rules.via_res;
     Ok(NetParasitics {
         name: net.name.clone(),
+        raw_name: net.raw_name.clone(),
         pins: net.pins.clone(),
         res_ohm,
         cap_ff,

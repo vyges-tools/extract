@@ -5,6 +5,7 @@ use vyges_extract::spef::render_json;
 fn json_summary() {
     let nets = vec![NetParasitics {
         name: "clk".into(),
+        raw_name: String::new(),
         pins: vec![("a".into(), "X".into())],
         res_ohm: 10.0,
         cap_ff: 0.5,

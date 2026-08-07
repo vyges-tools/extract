@@ -466,6 +466,7 @@ mod tests {
     fn two_pin_wire_is_two_nodes_one_resistor() {
         let net = DefNet {
             name: "n".into(),
+            raw_name: String::new(),
             pins: vec![("u0".into(), "Y".into()), ("u1".into(), "A".into())],
             segments: vec![seg("met1", 0.0, 0.0, 10.0, 0.0)],
             vias: 0,
@@ -489,6 +490,7 @@ mod tests {
         // genuine internal node, not collapsed into a star.
         let net = DefNet {
             name: "n".into(),
+            raw_name: String::new(),
             pins: vec![
                 ("drv".into(), "Y".into()),
                 ("s0".into(), "A".into()),
@@ -530,6 +532,7 @@ mod tests {
     fn a_via_landing_mid_span_still_joins_the_layers() {
         let net = DefNet {
             name: "n".into(),
+            raw_name: String::new(),
             pins: vec![("a".into(), "A".into()), ("b".into(), "Y".into())],
             segments: vec![
                 seg("met2", 230.690, 1035.470, 230.690, 1043.460), // the run it lands on
@@ -561,6 +564,7 @@ mod tests {
         // a branch taps a spine between its ends — an endpoint of one, interior of the other
         let net = DefNet {
             name: "n".into(),
+            raw_name: String::new(),
             pins: vec![("a".into(), "A".into()), ("b".into(), "Y".into())],
             segments: vec![
                 seg("met1", 0.0, 0.0, 20.0, 0.0),  // spine
@@ -589,6 +593,7 @@ mod tests {
     fn crossing_layers_without_a_via_are_not_shorted() {
         let net = DefNet {
             name: "n".into(),
+            raw_name: String::new(),
             pins: vec![("a".into(), "A".into()), ("b".into(), "Y".into())],
             segments: vec![
                 seg("met1", 0.0, 5.0, 20.0, 5.0),   // horizontal on met1
@@ -615,6 +620,7 @@ mod tests {
     fn a_via_does_not_short_a_layer_that_merely_passes_through() {
         let net = DefNet {
             name: "n".into(),
+            raw_name: String::new(),
             pins: vec![("a".into(), "A".into()), ("b".into(), "Y".into())],
             segments: vec![
                 seg("met1", 630.430, 1371.730, 630.430, 1372.070), // runs past 1371.900
@@ -672,6 +678,7 @@ mod tests {
     fn an_ambiguous_via_with_no_lef_degrades_rather_than_guesses() {
         let net = DefNet {
             name: "n".into(),
+            raw_name: String::new(),
             pins: vec![("a".into(), "A".into()), ("b".into(), "Y".into())],
             segments: vec![
                 seg("met1", 630.430, 1371.730, 630.430, 1372.070),
@@ -714,6 +721,7 @@ mod tests {
         for declared_on in ["met1", "met2"] {
             let net = DefNet {
                 name: "n".into(),
+                raw_name: String::new(),
                 pins: vec![("a".into(), "A".into()), ("b".into(), "Y".into())],
                 segments: vec![
                     seg("met1", 1.0, 2.0, 1.0, 5.0),
@@ -747,6 +755,7 @@ mod tests {
         let rules = RcRules::parse("met1 0.1 0.05 0.0\n").unwrap();
         let whole = DefNet {
             name: "n".into(),
+            raw_name: String::new(),
             pins: vec![("a".into(), "A".into()), ("b".into(), "Y".into())],
             segments: vec![seg("met1", 0.0, 0.0, 20.0, 0.0)],
             vias: 0,
@@ -781,6 +790,7 @@ mod tests {
         // met1 then met2 meeting at (10,0): a via resistor links the two layers.
         let net = DefNet {
             name: "n".into(),
+            raw_name: String::new(),
             pins: vec![("u0".into(), "Y".into()), ("u1".into(), "A".into())],
             segments: vec![
                 seg("met1", 0.0, 0.0, 10.0, 0.0),

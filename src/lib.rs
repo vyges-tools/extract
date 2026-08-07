@@ -24,6 +24,8 @@ pub use vyges_loom::{def, lef};
 // (no routed DEF). Sits ABOVE rc.rs — it produces `DefNet`s the unchanged RC core
 // consumes. Uses the shared vyges-layout GDS kernel.
 pub mod coupling;
+/// The SPEF `*DATE` stamp and where its value comes from.
+pub mod date;
 pub mod engine;
 pub mod field;
 pub mod gds;

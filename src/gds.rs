@@ -252,6 +252,10 @@ fn trace_cell(cell: &Cell, map: &LayerMap, dbu_per_um: f64) -> Vec<DefNet> {
         });
         nets.push(DefNet {
             name,
+            // No source spelling to preserve: these nets are traced out of geometry, not read
+            // from a DEF, so their names are either a GDS text label or one we invented.
+            // `write_name()` falls back to `name` for exactly this case.
+            raw_name: String::new(),
             pins: Vec::new(),
             segments,
             vias: t.cut_count[nid],

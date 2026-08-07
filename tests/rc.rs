@@ -10,6 +10,7 @@ fn rules() -> RcRules {
 fn lumps_res_and_cap_over_segments_and_vias() {
     let net = DefNet {
         name: "clk".into(),
+        raw_name: String::new(),
         pins: vec![("ff0".into(), "CLK".into())],
         segments: vec![
             Segment::wire("met1", 0.0, 0.0, 3.0, 0.0),
@@ -28,6 +29,7 @@ fn lumps_res_and_cap_over_segments_and_vias() {
 fn unknown_layer_is_an_error_not_silent() {
     let net = DefNet {
         name: "x".into(),
+        raw_name: String::new(),
         pins: vec![],
         segments: vec![Segment::wire("met9", 0.0, 0.0, 1.0, 0.0)],
         vias: 0,
@@ -43,6 +45,7 @@ fn resistance_is_width_dependent_with_sheet_rho() {
     let rules = RcRules::parse("met1 0.125 0.078\nrsheet met1 0.1\n").unwrap();
     let net = DefNet {
         name: "n".into(),
+        raw_name: String::new(),
         pins: vec![],
         segments: vec![Segment::wire("met1", 0.0, 0.0, 10.0, 0.0)],
         vias: 0,
@@ -73,6 +76,7 @@ fn ndr_segment_width_overrides_layer_default() {
     let seg = Segment::wire("met1", 0.0, 0.0, 10.0, 0.0);
     let def_net = DefNet {
         name: "a".into(),
+        raw_name: String::new(),
         pins: vec![],
         segments: vec![seg.clone()],
         vias: 0,
@@ -89,6 +93,7 @@ fn ndr_segment_width_overrides_layer_default() {
     wide.width_um = 1.0;
     let ndr_net = DefNet {
         name: "b".into(),
+        raw_name: String::new(),
         pins: vec![],
         segments: vec![wide],
         vias: 0,

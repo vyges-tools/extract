@@ -33,13 +33,23 @@
 //! instance called `PIN`. OpenRCX reports `Spef instance PIN not found in db`, and on its
 //! in-process path the same unresolved name is a SIGSEGV rather than an error.
 //!
-//! **Names are written exactly as the DEF spelled them.** Escaping is not a property of the
+//! **Names are written exactly as the DEF spelled them** — via [`DefNet::raw_name`], which the
+//! DEF reader preserves alongside the canonical name. Escaping is not a property of the
 //! characters: SPEF's grammar reads `count[0]` as bit 0 of bus `count` and `CFG_REG\[0\]` as a
 //! name whose characters include brackets, and which is right depends on whether the netlist
 //! declares a bus or an escaped identifier. The DEF already carries that distinction, so
 //! re-deriving it is wrong in both directions — it produced `count\[0\]` on a bussed design
 //! (`net count\[0\] not found`, every bussed net) and a doubled backslash on a design whose DEF
 //! names were already escaped (a syntax error at the name map).
+//!
+//! That was the intent from the start, but for a while it was not what happened: the DEF reader
+//! unescaped on the way in, so by the time a name reached here the distinction was already gone
+//! and every escaped identifier went out under-escaped. It survived only because OpenSTA's
+//! lookup adds escapes and retries (`SdcNetwork::findNetRelative`) — a bug masked by someone
+//! else's leniency, which is the kind that stays hidden. Measured on a 3,119-net sky130 design:
+//! OpenROAD wrote `best_id\[0\]`, we wrote `best_id[0]`, and OpenSTA quietly reconciled them.
+//!
+//! [`DefNet::raw_name`]: vyges_loom::def::DefNet::raw_name
 //!
 //! **A coupling capacitor is listed in BOTH nets' blocks.** A reader applies it to the net whose
 //! block it appears in, so one listing leaves the other net believing it is uncoupled.
@@ -237,7 +247,9 @@ pub fn render_distributed(
     // Name map: all net names first (so net ids are contiguous 1..N and coupling
     // references stay readable), then instance names.
     let mut nm = NameMap::new();
-    let net_ids: Vec<usize> = nets.iter().map(|n| nm.intern(&n.name)).collect();
+    // `write_name`, not `name`: the SOURCE spelling, escaping intact. The canonical name is for
+    // joining; writing it declares the wrong object for an escaped identifier. See below.
+    let net_ids: Vec<usize> = nets.iter().map(|n| nm.intern(n.write_name())).collect();
     // DEF spells a TOP-LEVEL PORT connection as the pseudo-instance `PIN`, and SPEF spells one
     // `*P <name> <dir>` rather than `*I <inst>:<pin> <dir>`. Two consequences, and missing
     // either leaves the file broken for a different reader:

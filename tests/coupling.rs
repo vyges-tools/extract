@@ -11,6 +11,7 @@ fn no_widths() -> BTreeMap<String, f64> {
 fn hnet(name: &str, x0: f64, x1: f64, y: f64) -> DefNet {
     DefNet {
         name: name.into(),
+        raw_name: String::new(),
         pins: vec![],
         segments: vec![Segment::wire("met1", x0, y, x1, y)],
         vias: 0,
@@ -112,6 +113,7 @@ fn different_layers_dont_couple_laterally() {
 fn seg(layer: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> DefNet {
     DefNet {
         name: layer.into(),
+        raw_name: String::new(),
         pins: vec![],
         segments: vec![Segment::wire(layer, x0, y0, x1, y1)],
         vias: 0,
@@ -295,6 +297,7 @@ fn coupling_is_invariant_under_mirroring() {
         let f = i as f64;
         let mut n = DefNet {
             name: format!("n{i}"),
+            raw_name: String::new(),
             pins: vec![],
             segments: vec![],
             vias: 0,
@@ -322,6 +325,7 @@ fn coupling_is_invariant_under_mirroring() {
         nets.iter()
             .map(|n| DefNet {
                 name: n.name.clone(),
+                raw_name: String::new(),
                 pins: n.pins.clone(),
                 segments: n
                     .segments
@@ -435,6 +439,7 @@ fn parallel_result_is_bit_identical_to_serial() {
         // two collinear segments per net -> a neighbour couples to both (multi-contribution)
         nets.push(DefNet {
             name: format!("w{i}"),
+            raw_name: String::new(),
             pins: vec![],
             segments: vec![
                 Segment::wire("met1", 0.0, y, 5.0, y),

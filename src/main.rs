@@ -433,10 +433,15 @@ fn render(
             None => j,
         }
     } else {
+        // The stamp is resolved HERE, in the binary, not inside the renderer: --date, else
+        // SOURCE_DATE_EPOCH, else the wall clock (see vyges_extract::date). Keeping the clock out
+        // of `render_distributed` is what lets it stay a pure function two runs can be compared
+        // byte-for-byte — the property tests/spef.rs asserts.
+        let date = vyges_extract::date::resolve(cli.date.as_deref());
         spef::render_distributed(
             design,
             &Units::default(),
-            None,
+            date.as_deref(),
             nets,
             trees,
             couplings,
@@ -482,12 +487,14 @@ fn demo_nets() -> Vec<NetParasitics> {
     vec![
         NetParasitics {
             name: "clk".into(),
+            raw_name: String::new(),
             pins: vec![("clkbuf".into(), "X".into()), ("ff0".into(), "CLK".into())],
             res_ohm: 12.5,
             cap_ff: 6.4,
         },
         NetParasitics {
             name: "n0".into(),
+            raw_name: String::new(),
             pins: vec![("u0".into(), "Y".into()), ("u1".into(), "A".into())],
             res_ohm: 3.1,
             cap_ff: 1.8,

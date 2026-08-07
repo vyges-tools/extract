@@ -56,6 +56,7 @@ fn coupling_dense_block() {
     let nets: Vec<DefNet> = (0..wires)
         .map(|i| DefNet {
             name: format!("w{i}"),
+            raw_name: String::new(),
             pins: vec![],
             segments: vec![Segment::wire(
                 "met1",

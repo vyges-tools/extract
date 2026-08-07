@@ -5,6 +5,7 @@ use vyges_extract::spef::{render, Units};
 fn net() -> NetParasitics {
     NetParasitics {
         name: "clk".into(),
+        raw_name: String::new(),
         pins: vec![("clkbuf".into(), "X".into()), ("ff0".into(), "CLK".into())],
         res_ohm: 10.05,
         cap_ff: 0.45,
@@ -77,6 +78,7 @@ fn name_map_and_dnet() {
 fn coupling_adds_to_totals_and_caps() {
     let n0 = NetParasitics {
         name: "n0".into(),
+        raw_name: String::new(),
         pins: vec![("u0".into(), "Y".into())],
         res_ohm: 1.0,
         cap_ff: 0.20,
@@ -211,6 +213,7 @@ fn a_port_is_never_written_as_a_name_map_reference() {
     // instance and is deliberately never interned, so any `*<id>` built from it dangles.
     let with_port = NetParasitics {
         name: "clk".into(),
+        raw_name: String::new(),
         pins: vec![("PIN".into(), "clk_i".into()), ("ff0".into(), "CLK".into())],
         res_ohm: 10.0,
         cap_ff: 0.4,
@@ -349,4 +352,72 @@ fn ordinary_names_are_not_escaped() {
     let text = render("blk", &Units::default(), None, &[net()], &[]);
     assert!(!text.contains("\\clk"), "{text}");
     assert!(name_map(&text).contains(&"clk".to_string()), "{:?}", name_map(&text));
+}
+
+/// **The source spelling reaches the name map.**
+///
+/// SPEF's grammar reads `count[0]` as a BIT_IDENT — bit 0 of a bus called `count` — and
+/// `CFG_REG\[0\]` as an ID whose characters happen to include brackets. They name different
+/// objects, and only the source artifact knows which one a design meant: synthesis flattening a
+/// bus emits `wire \CFG_REG[0] ;`, a scalar net whose own name has brackets in it.
+///
+/// The DEF reader unescapes so names JOIN (the netlist and SPEF both spell them unescaped), which
+/// is right — but it used to be all it kept, so every escaped identifier went out under-escaped.
+/// OpenSTA absorbed it, because `SdcNetwork::findNetRelative` retries with escapes added; a
+/// stricter reader, or a design owning both a bus `foo` and a scalar `foo[0]`, would not.
+/// `raw_name` carries the spelling through so the writer reproduces it instead of guessing.
+#[test]
+fn a_nets_source_spelling_is_what_reaches_the_name_map() {
+    let mk = |name: &str, raw: &str| NetParasitics {
+        name: name.into(),
+        raw_name: raw.into(),
+        pins: vec![("u0".into(), "Y".into()), ("u1".into(), "A".into())],
+        res_ohm: 1.0,
+        cap_ff: 1.0,
+    };
+    let s = render(
+        "d",
+        &Units::default(),
+        None,
+        &[
+            // an escaped identifier: DEF wrote the backslashes, so we must too
+            mk("CFG_REG[0]", "CFG_REG\\[0\\]"),
+            // a genuine bus bit: DEF wrote it bare, so re-escaping would invent a net
+            mk("count[0]", "count[0]"),
+            // no source spelling (a gds-traced net): fall back to the canonical name
+            mk("traced", ""),
+        ],
+        &[],
+    );
+    let map: Vec<&str> = s
+        .lines()
+        .skip_while(|l| !l.starts_with("*NAME_MAP"))
+        .take_while(|l| !l.is_empty())
+        .filter(|l| l.starts_with('*') && *l != "*NAME_MAP")
+        .collect();
+
+    assert!(
+        map.iter().any(|l| l.ends_with(" CFG_REG\\[0\\]")),
+        "escaped identifier must keep its backslashes; name map was {map:?}"
+    );
+    assert!(
+        !map.iter().any(|l| l.ends_with(" CFG_REG[0]")),
+        "the unescaped form declares a bus bit that does not exist; name map was {map:?}"
+    );
+    assert!(
+        map.iter().any(|l| l.ends_with(" count[0]")),
+        "a real bus bit must stay bare — escaping it is the failure that produced \
+         `net count\\[0\\] not found` for every bussed net; name map was {map:?}"
+    );
+    assert!(
+        map.iter().any(|l| l.ends_with(" traced")),
+        "an empty raw_name must fall back to the canonical name, never write nothing; \
+         name map was {map:?}"
+    );
+    // and the escaping is written once, not doubled — the other historical direction, which
+    // made the file a syntax error at the name map
+    assert!(
+        !s.contains("\\\\["),
+        "doubled backslash in the name map: {s}"
+    );
 }
