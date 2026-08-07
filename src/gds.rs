@@ -51,6 +51,12 @@ use vyges_layout::geom::{bbox, Rect};
 
 use crate::def::{DefNet, Segment};
 
+
+/// A GDS layer/datatype pair, which is how a layermap keys a layer.
+type LayerKey = (i16, i16);
+/// One closed boundary, as GDS stores it: a list of (x, y) in database units.
+type Polygon = Vec<(i32, i32)>;
+
 /// GDS layer + datatype key.
 pub type Ld = (i16, i16);
 
@@ -190,7 +196,7 @@ fn trace_cell(cell: &Cell, map: &LayerMap, dbu_per_um: f64) -> Vec<DefNet> {
     use vyges_layout::connect::{self, Cut};
     // gather routing geometry per layer, via geometry, and labels (each element as
     // its rectangle — matching this front-end's bbox model).
-    let mut by_layer: BTreeMap<(i16, i16), Vec<Vec<(i32, i32)>>> = BTreeMap::new();
+    let mut by_layer: BTreeMap<LayerKey, Vec<Polygon>> = BTreeMap::new();
     let mut vias: Vec<Vec<(i32, i32)>> = Vec::new();
     let mut labels: Vec<(String, i16, i32, i32)> = Vec::new();
     for el in &cell.elements {
@@ -215,7 +221,7 @@ fn trace_cell(cell: &Cell, map: &LayerMap, dbu_per_um: f64) -> Vec<DefNet> {
             }
         }
     }
-    let layers: Vec<((i16, i16), Vec<Vec<(i32, i32)>>)> = by_layer.into_iter().collect();
+    let layers: Vec<(LayerKey, Vec<Polygon>)> = by_layer.into_iter().collect();
     let cuts = vec![Cut::Overlap { cut: vias }];
     let t = connect::trace(&layers, &cuts, &labels);
 
@@ -395,8 +401,8 @@ mod tests {
     #[test]
     fn library_round_trip_through_flatten() {
         // a real GDS Library -> trace_library (exercises flatten + db_unit scale).
-        let mut lib = Library::default(); // db_unit 1e-9 -> 1000 dbu/um
-        lib.name = "TOP".into();
+        // db_unit 1e-9 -> 1000 dbu/um
+        let mut lib = Library { name: "TOP".into(), ..Default::default() };
         lib.cells.push(Cell {
             name: "top".into(),
             elements: vec![

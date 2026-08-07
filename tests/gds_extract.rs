@@ -34,8 +34,7 @@ fn gds_traced_nets_extract_through_the_rc_core() {
     // A tiny analog-style GDS: a 20um bias line on met1, and a sensitive node that
     // goes met1 (10um) -> via -> met2 (10um), running parallel to the bias line.
     // 1000 dbu/um (default db_unit 1e-9). All values hand-checkable.
-    let mut lib = Library::default();
-    lib.name = "TOP".into();
+    let mut lib = Library { name: "TOP".into(), ..Default::default() };
     lib.cells.push(Cell {
         name: "top".into(),
         elements: vec![

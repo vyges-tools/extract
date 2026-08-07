@@ -174,6 +174,9 @@ pub fn extract(job: &ExtractJob) -> Result<Extraction, ExtractError> {
     let couplings =
         coupling::extract_coupling_blocked(&d.nets, &r, &lef.widths, &lef.thicknesses, &blockers);
     lap!("coupling");
+    // The macro resets the clock after printing, so the final lap's reset is dead by
+    // construction. Read it once rather than restructure a debugging aid around a lint.
+    let _ = t;
     // Conditional ground-cap shielding: a net's coupling is field that would otherwise
     // be grounded fringe, so reduce its grounded cap by `shield_k · Cc_net` (charge
     // conservation) — making the ground cap neighbour-dependent, the spread lever.

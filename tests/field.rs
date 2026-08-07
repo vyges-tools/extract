@@ -37,10 +37,10 @@ fn fringe_falls_faster_than_plate_at_wide_spacing() {
         "fringe-corrected falls below plate at S>>H: {fringe} vs {plate}"
     );
     // taller layer (more H) competes less with ground -> couples more at the same S
-    let lowH = coupling_per_um_fringe(4.0, 0.35, 0.5, 1.0);
-    let hiH = coupling_per_um_fringe(4.0, 0.35, 3.0, 1.0);
+    let low_height = coupling_per_um_fringe(4.0, 0.35, 0.5, 1.0);
+    let high_height = coupling_per_um_fringe(4.0, 0.35, 3.0, 1.0);
     assert!(
-        hiH > lowH,
+        high_height > low_height,
         "higher metal couples more (less ground shorting)"
     );
     // H<=0 falls back to the plate form

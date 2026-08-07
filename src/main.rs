@@ -252,7 +252,7 @@ fn ensure_rc_rules(cli: &Cli) -> Result<String, String> {
             if let Ok(rcx) = std::fs::read_to_string(cap) {
                 let cr = vyges_extract::rules::RcRules::from_captable(&lef.routing_order, &rcx);
                 for (n, cl) in &cr.layers {
-                    let e = rules.layers.entry(n.clone()).or_insert_with(|| cl.clone());
+                    let e = rules.layers.entry(n.clone()).or_insert(*cl);
                     if e.res_per_um == 0.0 {
                         e.res_per_um = cl.res_per_um;
                     }
@@ -705,38 +705,37 @@ fn main() {
             // like a clean result. Zero parasitics are not a measurement, they are a missing
             // input, and a tool that cannot tell the difference should say so rather than
             // hand back confident numbers.
-            match vyges_extract::rules::RcRules::load(&job.rules) {
-                Ok(r) => {
-                    let (no_r, no_c) = r.incomplete();
-                    if !no_r.is_empty() || !no_c.is_empty() {
-                        // Record it whether or not the run proceeds. If it does proceed (via
-                        // the override), the resulting parasitics are understated and the
-                        // caveat has to travel with them -- a downstream timer has no other
-                        // way to learn it (#72).
-                        cli.incomplete_rc_note = Some(format!(
-                            "RC deck {} has {} layer(s) with no resistance and {} with no \
-                             capacitance; extracted parasitics are understated",
-                            job.rules,
-                            no_r.len(),
-                            no_c.len()
-                        ));
-                    }
-                    if warn_if_incomplete(&r) && !cli.allow_incomplete_rc {
-                        eprintln!(
-                            "error: {} has layers with no R and/or no C, so extraction would \
-                             report parasitics that are partly or wholly zero.\n       Supply \
-                             the missing numbers with --captable <rcx_rules>, or pass \
-                             --allow-incomplete-rc to extract anyway and accept that the \
-                             result understates parasitics.",
-                            job.rules
-                        );
-                        exit(2);
-                    }
+            // `if let`, not a `match`: the error arm is deliberately empty, and writing it out
+            // invites the reader to look for a second case that is not there.
+            if let Ok(r) = vyges_extract::rules::RcRules::load(&job.rules) {
+                let (no_r, no_c) = r.incomplete();
+                if !no_r.is_empty() || !no_c.is_empty() {
+                    // Record it whether or not the run proceeds. If it does proceed (via
+                    // the override), the resulting parasitics are understated and the
+                    // caveat has to travel with them -- a downstream timer has no other
+                    // way to learn it (#72).
+                    cli.incomplete_rc_note = Some(format!(
+                        "RC deck {} has {} layer(s) with no resistance and {} with no \
+                         capacitance; extracted parasitics are understated",
+                        job.rules,
+                        no_r.len(),
+                        no_c.len()
+                    ));
                 }
-                // Not this check's job to diagnose an unreadable ruleset -- extraction is
-                // about to open the same file and will report it with better context.
-                Err(_) => {}
+                if warn_if_incomplete(&r) && !cli.allow_incomplete_rc {
+                    eprintln!(
+                        "error: {} has layers with no R and/or no C, so extraction would \
+                         report parasitics that are partly or wholly zero.\n       Supply \
+                         the missing numbers with --captable <rcx_rules>, or pass \
+                         --allow-incomplete-rc to extract anyway and accept that the \
+                         result understates parasitics.",
+                        job.rules
+                    );
+                    exit(2);
+                }
             }
+            // An unreadable ruleset is not this check's job to diagnose -- extraction is about to
+            // open the same file and will report it with better context.
             match engine::extract(&job) {
                 Ok(ex) => {
                     if cli.verbose {
