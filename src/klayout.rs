@@ -74,6 +74,10 @@ pub fn attach_hookup(spef: &mut Spef, def: &Def, resolver: &PinResolver) -> usiz
                 node: format!("{inst}:{pin}"),
                 dir,
                 cap_ff,
+                // These come from a KLayout netlist's instance pins, so none of them is a
+                // top-level port; a port would be written `*P <name> <dir>` and carries no
+                // instance at all.
+                is_port: false,
             });
             hooked += 1;
         }
