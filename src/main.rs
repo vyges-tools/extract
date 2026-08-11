@@ -17,19 +17,19 @@ use vyges_extract::spef::{self, Units};
 use vyges_extract::tree::RcNetwork;
 
 const USAGE: &str = "\
-vyges-extract — foundry-correlated RC parasitic extraction (DEF -> SPEF)
+vyges loom extract — foundry-correlated RC parasitic extraction (DEF -> SPEF)
 
 usage:
-  vyges-extract run    JOB [-o OUT] [--json] [--pdk NAME | --tech-lef PATH] [--refresh]
-                           [--captable PATH | --allow-incomplete-rc]
-                           [--cell-lef CL --lib LIB]   # std-cell *CONN hookup
-  vyges-extract gen-rc (--pdk NAME | --tech-lef PATH) [--refresh]
-  vyges-extract check  JOB
-  vyges-extract demo   [-o OUT] [--json]
-  vyges-extract klayout2spef --gds F --layermap M [--top CELL] [-o OUT] [--geom-out G]
-                             [--def D --cell-lef CL --lib LIB]
-                             [--runner podman [--image REF] [--mount DIR] | --python CMD]
-                             [--routing-only] [--from-dump F] [--self-test]
+  vyges loom extract run    JOB [-o OUT] [--json] [--pdk NAME | --tech-lef PATH] [--refresh]
+                                [--captable PATH | --allow-incomplete-rc]
+                                [--cell-lef CL --lib LIB]   # std-cell *CONN hookup
+  vyges loom extract gen-rc (--pdk NAME | --tech-lef PATH) [--refresh]
+  vyges loom extract check  JOB
+  vyges loom extract demo   [-o OUT] [--json]
+  vyges loom extract klayout2spef --gds F --layermap M [--top CELL] [-o OUT] [--geom-out G]
+                                  [--def D --cell-lef CL --lib LIB]
+                                  [--runner podman [--image REF] [--mount DIR] | --python CMD]
+                                  [--routing-only] [--from-dump F] [--self-test]
 
 klayout2spef drives a headless KLayout (LayoutToNetlist) over a GDS to write SPEF +
 an EM geometry sidecar (per-segment layer/width/length) for current-density sign-off.
