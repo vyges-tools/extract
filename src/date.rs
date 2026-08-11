@@ -172,6 +172,14 @@ mod tests {
         let mo = parts.next().unwrap_or("");
         assert!(WEEKDAYS.contains(&wd), "weekday — got {wd:?}");
         assert!(MONTHS.contains(&mo), "month — got {mo:?}");
-        assert!(!s.contains('T'), "must not be ISO 8601 (tests/spef.rs pins this)");
+        // The ISO-8601 marker is a `T` BETWEEN DIGITS (2026-08-11T06:07:33), not any `T`.
+        // `!s.contains('T')` also matched the weekday, so this failed every Tuesday and
+        // Thursday — green on the other five days, which is how it survived.
+        assert!(
+            !s.as_bytes()
+                .windows(3)
+                .any(|w| w[0].is_ascii_digit() && w[1] == b'T' && w[2].is_ascii_digit()),
+            "must not be ISO 8601 (tests/spef.rs pins this) — got {s:?}"
+        );
     }
 }
