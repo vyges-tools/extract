@@ -169,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "vyges-extract"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "rayon",
  "vyges-events",
@@ -179,13 +179,13 @@ dependencies = [
 
 [[package]]
 name = "vyges-geom"
-version = "0.1.35"
-source = "git+https://github.com/vyges-tools/geom?branch=main#83497a552402f74593f62784a9abbc8b0696ff26"
+version = "0.1.36"
+source = "git+https://github.com/vyges-tools/geom?branch=main#3af0def2c982814ec235671a8d94599162ba7286"
 
 [[package]]
 name = "vyges-layout"
-version = "0.1.35"
-source = "git+https://github.com/vyges-tools/layout?branch=main#8c7793ed7d2d04a269f0dc0345b1aea89b94a89a"
+version = "0.1.36"
+source = "git+https://github.com/vyges-tools/layout?branch=main#da851018db3739a7c38b3e6d3a0479166a92668b"
 dependencies = [
  "miniz_oxide",
  "vyges-geom",
@@ -193,8 +193,8 @@ dependencies = [
 
 [[package]]
 name = "vyges-loom"
-version = "0.1.35"
-source = "git+https://github.com/vyges-tools/loom?branch=main#f13e950d4eb2dbb88319e33151684c6dcaf4d341"
+version = "0.1.36"
+source = "git+https://github.com/vyges-tools/loom?branch=main#d0043e7a23b2249b20bae47ee3c00e5fd1df154f"
 
 [[package]]
 name = "zmij"
