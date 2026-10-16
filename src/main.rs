@@ -16,6 +16,27 @@ use vyges_extract::rc::NetParasitics;
 use vyges_extract::spef::{self, Units};
 use vyges_extract::tree::RcNetwork;
 
+/// A diagnostic as a structured event (`EXTRACT-ERROR`, or `EXTRACT-WARNING` for a warning; `vyges-events/1.0`)
+/// instead of a bare stderr line; text after a blank line (the usage) stays plain help.
+fn diag_line(msg: String) {
+    let (head, help) = match msg.split_once("\n\n") {
+        Some((h, rest)) => (h.to_string(), Some(rest.to_string())),
+        None => (msg, None),
+    };
+    let warn = head.starts_with("warning: ");
+    let text = head.strip_prefix("error: ").or_else(|| head.strip_prefix("warning: ")).unwrap_or(&head).to_string();
+    let (severity, code) = if warn { (vyges_events::Severity::Warn, "EXTRACT-WARNING") } else { (vyges_events::Severity::Error, "EXTRACT-ERROR") };
+    vyges_events::emit(&vyges_events::Event::new("vyges-extract", severity, text).with_code(code));
+    if let Some(h) = help {
+        eprintln!("{h}");
+    }
+}
+
+macro_rules! diag {
+    ($($t:tt)*) => { diag_line(format!($($t)*)) };
+}
+
+
 const USAGE: &str = "\
 vyges loom extract — foundry-correlated RC parasitic extraction (DEF -> SPEF)
 
@@ -171,7 +192,7 @@ fn is_local_path(s: &str) -> bool {
 fn warn_if_incomplete(rules: &vyges_extract::rules::RcRules) -> bool {
     let (no_r, no_c) = rules.incomplete();
     if !no_r.is_empty() {
-        eprintln!(
+        diag!(
             "warning: no resistance for [{}] — the tech LEF is geometry-only; pass \
              --captable <rcx_rules>",
             no_r.join(", ")
@@ -185,7 +206,7 @@ fn warn_if_incomplete(rules: &vyges_extract::rules::RcRules) -> bool {
         } else {
             "the deck carries neither R nor C for these layers"
         };
-        eprintln!(
+        diag!(
             "warning: no capacitance for [{}] — {why}; pass --captable for cap",
             no_c.join(", ")
         );
@@ -391,7 +412,7 @@ fn write_out(text: &str, cli: &Cli) {
                 }
             }
             Err(e) => {
-                eprintln!("error: {path}: {e}");
+                diag!("error: {path}: {e}");
                 exit(1);
             }
         },
@@ -464,7 +485,7 @@ fn build_run_resolver(job: &ExtractJob, cli: &Cli) -> Option<vyges_extract::hook
     let def = match vyges_extract::def::Def::load(&job.resolve(&job.def)) {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("error: {}: {e}", job.def);
+            diag!("error: {}: {e}", job.def);
             exit(1);
         }
     };
@@ -477,7 +498,7 @@ fn build_run_resolver(job: &ExtractJob, cli: &Cli) -> Option<vyges_extract::hook
     match vyges_extract::hookup::PinResolver::new(&def, cell_lef.as_deref(), cli.lib.as_deref()) {
         Ok(r) => Some(r),
         Err(e) => {
-            eprintln!("error: {e}");
+            diag!("error: {e}");
             exit(1);
         }
     }
@@ -648,7 +669,7 @@ fn main() {
                     j.design, j.def, j.rules, j.corner, j.temp
                 ),
                 Err(e) => {
-                    eprintln!("error: {e}");
+                    diag!("error: {e}");
                     exit(2);
                 }
             }
@@ -666,7 +687,7 @@ fn main() {
                     }
                 }
                 Err(e) => {
-                    eprintln!("error: {e}");
+                    diag!("error: {e}");
                     exit(2);
                 }
             }
@@ -679,7 +700,7 @@ fn main() {
             let mut job = match ExtractJob::load(path) {
                 Ok(j) => j,
                 Err(e) => {
-                    eprintln!("error: {e}");
+                    diag!("error: {e}");
                     exit(2);
                 }
             };
@@ -695,12 +716,12 @@ fn main() {
                         job.rules = p;
                     }
                     Err(e) => {
-                        eprintln!("error: {e}");
+                        diag!("error: {e}");
                         exit(2);
                     }
                 }
             } else if job.rules.is_empty() {
-                eprintln!("error: job has no `rules:` — pass --pdk NAME or --tech-lef PATH to derive them");
+                diag!("error: job has no `rules:` — pass --pdk NAME or --tech-lef PATH to derive them");
                 exit(2);
             }
             // Refuse to extract against a ruleset that says wires are perfect conductors.
@@ -730,7 +751,7 @@ fn main() {
                     ));
                 }
                 if warn_if_incomplete(&r) && !cli.allow_incomplete_rc {
-                    eprintln!(
+                    diag!(
                         "error: {} has layers with no R and/or no C, so extraction would \
                          report parasitics that are partly or wholly zero.\n       Supply \
                          the missing numbers with --captable <rcx_rules>, or pass \
@@ -782,7 +803,7 @@ fn main() {
                     );
                 }
                 Err(e) => {
-                    eprintln!("error: {e}");
+                    diag!("error: {e}");
                     exit(1);
                 }
             }
@@ -842,7 +863,7 @@ fn klayout2spef(cli: &Cli) {
         Some(p) => match std::fs::read_to_string(p) {
             Ok(t) => Some(t),
             Err(e) => {
-                eprintln!("error: {p}: {e}");
+                diag!("error: {p}: {e}");
                 exit(2);
             }
         },
@@ -911,7 +932,7 @@ fn klayout2spef(cli: &Cli) {
                         }
                     }
                     Err(e) => {
-                        eprintln!("error: {gp}: {e}");
+                        diag!("error: {gp}: {e}");
                         exit(1);
                     }
                 },
@@ -921,7 +942,7 @@ fn klayout2spef(cli: &Cli) {
             }
         }
         Err(e) => {
-            eprintln!("error: {e}");
+            diag!("error: {e}");
             exit(1);
         }
     }
