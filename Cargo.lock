@@ -194,7 +194,7 @@ dependencies = [
 [[package]]
 name = "vyges-loom"
 version = "0.1.41"
-source = "git+https://github.com/vyges-tools/loom?branch=main#d64388932348bcf5cc49cea3372138877446306a"
+source = "git+https://github.com/vyges-tools/loom?branch=main#f028a5d5a0977b14fc9977835a27020e580a8dbb"
 
 [[package]]
 name = "zmij"
