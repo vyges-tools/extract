@@ -590,7 +590,7 @@ fn main() {
   ],
   "invocation": {
     "args_template": ["run", "{job}"],
-    "optional": [ { "arg": "out", "flag": "-o" } ],
+    "optional": [ { "arg": "out", "flag": "-o" }, { "arg": "threads", "flag": "--threads" } ],
     "emits_json": true
   },
   "inputs": {
@@ -598,7 +598,8 @@ fn main() {
     "required": ["job"],
     "properties": {
       "job": { "type": "string", "description": "path to the extract job file (design, def, rules, corner, temp)" },
-      "out": { "type": "string", "description": "write the SPEF to FILE instead of stdout" }
+      "out": { "type": "string", "description": "write the SPEF to FILE instead of stdout" },
+      "threads": { "type": "integer", "description": "worker threads; omit for the balanced default (see the top-level threads block)" }
     }
   },
   "artifacts": [ { "role": "spef", "from_arg": "out" } ],
@@ -606,10 +607,11 @@ fn main() {
     "id": "parasitic-extract",
     "not_applicable": true
   },
-  "consumes": ["def", "gds"]
+  "consumes": ["def", "gds"],
+  "threads": @THREADS@
 }
 "#;
-        print!("{DESCRIBE}");
+        print!("{}", DESCRIBE.replace("@THREADS@", vyges_loom::threads::DESCRIBE_THREADS));
         return;
     }
 
