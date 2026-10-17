@@ -95,17 +95,20 @@ pub fn extract(job: &ExtractJob) -> Result<Extraction, ExtractError> {
             }
         };
     }
-    let d: Def =
-        def::load(&job.resolve(&job.def)).map_err(|e| ExtractError::Parse(e.to_string()))?;
-    lap!("parse DEF");
-    let r: RcRules =
-        RcRules::load(&job.resolve(&job.rules)).map_err(|e| ExtractError::Parse(e.to_string()))?;
     // LEF (optional) -> routing widths (width-dependent R + edge-to-edge coupling
-    // gaps) + thicknesses (field kernel). Loaded before RC so resistance is width-aware.
+    // gaps) + thicknesses (field kernel). Loaded before RC so resistance is width-aware, and
+    // before the DEF: a routed path continues on a via's other layer, and only the LEF says
+    // which two layers a technology via joins.
     let lef = match &job.lef {
         Some(p) => Lef::load(&job.resolve(p)).map_err(|e| ExtractError::Parse(e.to_string()))?,
         None => Lef::default(),
     };
+    let def_path = job.resolve(&job.def);
+    let d: Def = if job.lef.is_some() { Def::load_with(&def_path, &lef) } else { def::load(&def_path) }
+        .map_err(|e| ExtractError::Parse(e.to_string()))?;
+    lap!("parse DEF");
+    let r: RcRules =
+        RcRules::load(&job.resolve(&job.rules)).map_err(|e| ExtractError::Parse(e.to_string()))?;
     emit_input_coverage(&d, &r, &lef, job.lef.is_some());
     // Per-net RC is independent across nets — extract them in parallel (rayon). The pool
     // size is set once in main() from `--threads`/`-j` (default: all cores). collect() into
@@ -234,6 +237,18 @@ fn emit_input_coverage(d: &Def, rules: &RcRules, lef: &Lef, lef_given: bool) {
         vyges_events::emit(&Event::new("vyges-extract", sev, msg).with_code(code));
     };
 
+    if d.unresolved_vias > 0 {
+        emit(
+            true,
+            "EXTRACT-VIA-LAYERS",
+            format!(
+                "{} via(s) in routed paths whose two layers are unknown{}: the wiring past each was \
+                 kept on the layer before it, where it continues on the via's other layer",
+                d.unresolved_vias,
+                if lef_given { "" } else { " (no tech LEF given)" }
+            ),
+        );
+    }
     let routed = d.nets.iter().filter(|n| !n.segments.is_empty()).count();
     let bare = d.nets.len() - routed;
     emit(
