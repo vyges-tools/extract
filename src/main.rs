@@ -617,16 +617,6 @@ fn main() {
 
     let mut cli = parse_cli(&args);
 
-    // Size the rayon thread pool once, before any parallel extraction: `-j N`, else
-    // `VYGES_THREADS`, else the suite's balanced default (`vyges_loom::threads`) — not every
-    // logical core, which past the physical ones adds memory and little speed. The SPEF does not
-    // depend on the count (identical at 1, 4 and 10 on a 14k-net routed block).
-    let choice = vyges_loom::threads::pick(cli.threads, &[]);
-    let _ = rayon::ThreadPoolBuilder::new().num_threads(choice.threads).build_global();
-    vyges_events::emit(
-        &vyges_events::Event::new("vyges-extract", vyges_events::Severity::Info, choice.line()).with_code("EXTRACT-THREADS"),
-    );
-
     if cli.bug_report {
         return link("Report a bug (central — vyges/community)", BUG_URL);
     }
@@ -653,6 +643,16 @@ fn main() {
         print!("{USAGE}");
         exit(if cmd.is_empty() && !cli.help { 2 } else { 0 });
     }
+
+    // Size the rayon thread pool once, before any parallel extraction (and after --help / --version, which do no work): `-j N`, else
+    // `VYGES_THREADS`, else the suite's balanced default (`vyges_loom::threads`) — not every
+    // logical core, which past the physical ones adds memory and little speed. The SPEF does not
+    // depend on the count (identical at 1, 4 and 10 on a 14k-net routed block).
+    let choice = vyges_loom::threads::pick(cli.threads, &[]);
+    let _ = rayon::ThreadPoolBuilder::new().num_threads(choice.threads).build_global();
+    vyges_events::emit(
+        &vyges_events::Event::new("vyges-extract", vyges_events::Severity::Info, choice.line()).with_code("EXTRACT-THREADS"),
+    );
 
     match cmd.as_str() {
         "demo" => {
