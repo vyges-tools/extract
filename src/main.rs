@@ -575,7 +575,7 @@ fn emit_extract_events(nets: &[NetParasitics], couplings: &[CouplingCap]) {
     );
 }
 
-fn main() {
+pub fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     if args.iter().any(|a| a == "--describe") {

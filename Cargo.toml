@@ -13,6 +13,11 @@ repository = "https://github.com/vyges-tools/extract"
 # vyges-layout supplies the GDS reader + geometry primitives for the optional
 # `gds -> DefNet` connectivity-tracing front-end (a GDS-only analog flow); the RC
 # core still consumes `&[DefNet]` only, so this stays above the rc.rs boundary.
+[features]
+# The command-line entry built into the library too (`cli_main`), for the suite binaries
+# that link every engine and run the one they are invoked as.
+suite = []
+
 [dependencies]
 vyges-loom = { git = "https://github.com/vyges-tools/loom", branch = "main" }
 vyges-layout = { git = "https://github.com/vyges-tools/layout", branch = "main" }
