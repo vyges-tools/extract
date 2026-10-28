@@ -60,13 +60,13 @@ an EM geometry sidecar (per-segment layer/width/length) for current-density sign
 RC rules come from a job's `rules:`, or are DERIVED from the PDK tech LEF via
 --pdk / --tech-lef (the metal stack is discovered, not hand-listed) and cached
 as vyges-additions/<pdk>/vyges-extract-rc.rules (regenerate with --refresh). When
-a tech LEF is geometry-only (no R/C), an OpenRCX captable supplies the numbers;
+a tech LEF is geometry-only (no R/C), a captable (an *.rcx_rules RC rules file) supplies the numbers;
 `run` refuses zero-R/C rules rather than report parasitics that are all zero.
 
 flags:
   --pdk NAME       derive RC rules from the PDK tech LEF (resolved via pdk-store)
   --tech-lef PATH  derive RC rules from this tech LEF directly
-  --captable PATH  OpenRCX rules file for R/C the LEF lacks (else pdk-store captable)
+  --captable PATH  RC rules file (captable) for R/C the LEF lacks (else pdk-store captable)
   --refresh        re-derive the cached RC rules
   --allow-incomplete-rc  extract even when a layer has no R/C (understates parasitics)
   -o FILE          write output to FILE (default: stdout)
