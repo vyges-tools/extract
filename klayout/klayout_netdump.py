@@ -12,6 +12,8 @@
 #
 # Layermap format (whitespace, '#' comments):
 #   metal <name> <gds_l>/<dt> <rsheet_ohm_sq> <carea_fF_um2> <cedge_fF_um>
+#         (several `metal` lines may share one <name>: a multi-patterned metal drawn on one
+#         datatype per mask. They are ONE conductor; the first line's R/C values apply.)
 #   via   <name> <gds_l>/<dt> <rcut_ohm> <below_metal> <above_metal>
 #   text  <gds_l>/<dt>
 #
@@ -63,7 +65,14 @@ def parse_layermap(path):
                     text = {"layer": int(l), "dtype": int(d)}
             except ValueError:
                 log(f"skip malformed layermap line: {line.strip()}")
-    return metals, vias, text
+    # One entry per metal NAME, in first-seen order; each carries every GDS layer drawn for it.
+    merged = {}
+    for m in metals:
+        if m["name"] in merged:
+            merged[m["name"]]["lds"].append((m["layer"], m["dtype"]))
+        else:
+            merged[m["name"]] = dict(m, lds=[(m["layer"], m["dtype"])])
+    return list(merged.values()), vias, text
 
 
 def wire_geom(region, dbu):
@@ -118,7 +127,15 @@ def main():
 
     regions = {}
     for m in metals:
-        r = l2n.make_layer(ly.layer(m["layer"], m["dtype"]), m["name"])
+        if len(m["lds"]) == 1:
+            r = l2n.make_layer(ly.layer(m["layer"], m["dtype"]), m["name"])
+        else:
+            # every mask datatype of the metal joined into one conductor layer
+            parts = [l2n.make_layer(ly.layer(l, d), f"{m['name']}#{l}/{d}") for (l, d) in m["lds"]]
+            r = parts[0]
+            for q in parts[1:]:
+                r = r + q
+            l2n.register(r, m["name"])
         regions[m["name"]] = r
         l2n.connect(r)  # intra-layer connectivity
     for v in vias:

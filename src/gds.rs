@@ -136,6 +136,13 @@ impl LayerMap {
         LayerMap::parse(&text)
     }
 
+    /// The key a routing shape is traced under: several datatypes may name ONE routing layer (a
+    /// multi-patterned metal drawn on one datatype per mask), and they are one conductor, so each
+    /// maps to the first (lowest) layer/datatype carrying that name.
+    fn conductor(&self, ld: Ld) -> Option<Ld> {
+        let name = self.routing.get(&ld)?;
+        self.routing.iter().find(|(_, n)| *n == name).map(|(k, _)| *k)
+    }
     fn is_via(&self, ld: Ld) -> bool {
         self.vias.contains(&ld)
     }
@@ -214,8 +221,8 @@ fn trace_cell(cell: &Cell, map: &LayerMap, dbu_per_um: f64) -> Vec<DefNet> {
             continue;
         }
         if let Some((ld, rect)) = shape_rect(el) {
-            if map.routing.contains_key(&ld) {
-                by_layer.entry(ld).or_default().push(rect.as_boundary());
+            if let Some(key) = map.conductor(ld) {
+                by_layer.entry(key).or_default().push(rect.as_boundary());
             } else if map.is_via(ld) {
                 vias.push(rect.as_boundary());
             }
@@ -326,6 +333,29 @@ mod tests {
         // total met1 run = 2um + 3um = 5um
         let total: f64 = nets[0].segments.iter().map(|s| s.len_um()).sum();
         assert!((total - 5.0).abs() < 1e-9, "len={total}");
+    }
+
+    /// A multi-patterned metal drawn on one datatype per mask: both datatypes name `met1`, so
+    /// abutting shapes of different masks are ONE net, its segments all on `met1`. A datatype
+    /// mapped to another layer name stays its own conductor.
+    #[test]
+    fn mask_datatypes_of_one_routing_layer_are_one_conductor() {
+        let m = LayerMap::parse("routing: 68/20 met1\nrouting: 68/21 met1\nrouting: 68/22 met1x\n").unwrap();
+        let cell = Cell {
+            name: "top".into(),
+            elements: vec![
+                rect(68, 20, 0, 0, 2000, 200),
+                rect(68, 21, 2000, 0, 5000, 200), // abuts, other mask -> same net
+                rect(68, 22, 5000, 0, 6000, 200), // abuts, another layer name -> own net
+            ],
+        };
+        let nets = trace_cell(&cell, &m, 1000.0);
+        assert_eq!(nets.len(), 2, "{nets:?}");
+        let one = nets.iter().find(|n| n.segments.len() == 2).expect("the two-mask net");
+        assert!(one.segments.iter().all(|s| s.layer == "met1"), "{one:?}");
+        assert_eq!(m.conductor((68, 21)), Some((68, 20)));
+        assert_eq!(m.conductor((68, 22)), Some((68, 22)));
+        assert_eq!(m.conductor((69, 20)), None);
     }
 
     #[test]
