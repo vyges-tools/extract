@@ -1,7 +1,5 @@
 # vyges-extract
 
-**[Download Loom](https://vyges.com/products/vyges-cli/#install)** · install the free [Vyges CLI](https://vyges.com/products/vyges-cli/), then `vyges install loom`
-
 Foundry-correlated RC **parasitic extraction**: a routed layout in, a SPEF
 parasitic model out.
 
