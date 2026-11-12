@@ -75,7 +75,7 @@ jobs:
           echo "PDK_TLEF=$PWD/$tlef" >> "$GITHUB_ENV"
           ls -lh "$tlef"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.100.0
       - uses: Swatinem/rust-cache@v2
 
       - name: Correlate
